@@ -90,6 +90,7 @@ class DictionaryService(QObject):
     mount_progress = Signal(int, int, str)   # done, total, name
     dict_mounted = Signal(int)               # 一部词库挂载完成
     mount_finished = Signal()                # 本轮全部处理完成
+    dict_mount_failed = Signal(int, str)     # dict_id, 错误信息（文件缺失等）
 
     def __init__(self, db: Database, cache_dir, parent=None):
         super().__init__(parent)
@@ -99,6 +100,8 @@ class DictionaryService(QObject):
         self._loader = None        # 当前 MountTask
         self._pending_reload = False
         self._folder_res_cache = {}  # (dict_id, path) -> bytes 仅缓存命中
+        self._mount_errors = {}    # dict_id -> 错误信息（文件缺失 / 解析失败）
+        self._one_off_loaders = []  # 单部词库重新挂载线程（防 GC）
 
     # ------------------------------------------------------------------ 词库
     def all_dicts(self) -> List[DictInfo]:
@@ -115,13 +118,28 @@ class DictionaryService(QObject):
         return dict_id in self._mounts
 
     def mount_status(self, dict_id: int) -> str:
-        """词库状态：ready / loading / missing / disabled。"""
+        """词库状态：ready / loading / missing / disabled。
+
+        ``missing`` 表示已注册但文件已不存在或挂载失败（用户最关心的
+        "为什么用不了"场景：文件夹改名 / 移动后路径失效）。
+        """
         for d in self.all_dicts():
             if d.id == dict_id:
                 if not d.enabled:
                     return "disabled"
-                return "ready" if dict_id in self._mounts else "loading"
+                if dict_id in self._mounts:
+                    return "ready"
+                if dict_id in self._mount_errors:
+                    return "missing"
+                # 即时判定文件是否还在（不依赖挂载线程先跑）
+                if not Path(d.filename).is_file():
+                    return "missing"
+                return "loading"
         return "missing"
+
+    def mount_error(self, dict_id: int) -> Optional[str]:
+        """该词库最近一次挂载失败的原因（缺失/解析失败），无则 None。"""
+        return self._mount_errors.get(dict_id)
 
     def mount_count(self) -> int:
         return len(self._mounts)
@@ -166,7 +184,7 @@ class DictionaryService(QObject):
             return
         task = MountTask(self.all_dicts(), self._cache_dir)
         task.mounted.connect(self._on_mounted)
-        task.mount_failed.connect(lambda _id, _msg: None)
+        task.mount_failed.connect(self._on_mount_failed)
         task.progress.connect(self.mount_progress)
         task.finished.connect(self._on_task_finished)
         self._loader = task
@@ -192,6 +210,7 @@ class DictionaryService(QObject):
         # 注册记录可能在挂载期间被删除
         if not any(d.id == dict_id for d in self.all_dicts()):
             return
+        self._mount_errors.pop(dict_id, None)  # 挂载成功则清除旧错误
         self._mounts[dict_id] = mount
         self._db.update_dict_counts(
             dict_id, mount.entry_count, mount.resource_count)
@@ -202,6 +221,44 @@ class DictionaryService(QObject):
         if self._pending_reload:
             self._pending_reload = False
             self.mount_all_async()
+
+    def _on_mount_failed(self, dict_id: int, msg: str):
+        """记录挂载失败原因，并通知 UI（让状态栏/管理框显示「文件缺失」）。"""
+        self._mount_errors[dict_id] = msg
+        self.dict_mount_failed.emit(dict_id, msg)
+
+    def _on_one_finished(self):
+        """单部重新挂载结束：刷新状态，并清理已结束线程引用。"""
+        self.mount_finished.emit()
+        self._one_off_loaders = [t for t in self._one_off_loaders if t.isRunning()]
+
+    def _mount_one(self, d: DictInfo):
+        """仅重新挂载一部词库（修复路径后使用，避免重挂全部）。"""
+        task = MountTask([d], self._cache_dir)
+        task.mounted.connect(self._on_mounted)
+        task.mount_failed.connect(self._on_mount_failed)
+        task.finished.connect(self._on_one_finished)
+        self._one_off_loaders.append(task)
+        task.start()
+
+    def repair_path(self, dict_id: int, new_path: str):
+        """修复词库路径：更新注册表文件位置并重新挂载该部词库。
+
+        用于文件夹改名 / 移动后，原注册路径失效的场景。不改动原文件，
+        仅更新 TinyDict 记录的 .mdx 位置。
+        """
+        p = Path(new_path)
+        if not p.is_file():
+            raise RuntimeError(f"文件不存在：{p}")
+        if p.suffix.lower() != ".mdx":
+            raise RuntimeError(f"不是 .mdx 文件：{p.name}")
+        self._db.set_filename(dict_id, str(p))
+        self._mount_errors.pop(dict_id, None)
+        self._mounts.pop(dict_id, None)
+        d = next((x for x in self.all_dicts() if x.id == dict_id), None)
+        if d is None:
+            return
+        self._mount_one(d)
 
     # ------------------------------------------------------------------ 查词
     def lookup(self, word: str) -> List[EntryResult]:

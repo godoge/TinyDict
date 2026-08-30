@@ -16,6 +16,8 @@ class Config:
     # - offline_mode         : 强制离线。True 时拦截所有远程请求（仅可用词库自带
     #                         离线资源）；False 时允许词库按需在线获取资源。
     #                         默认关闭，因为部分词库（如 OALDPEX）可能需要在线发音/图片。
+    # - wordbook_group_id    : 顶栏选中的生词本分组 id（★ 收录的归属分组），
+    #                         重启后保持上次选择；分组被删除时自动回退到默认分组 1。
     DEFAULTS = {
         "hotkey_show_hide": "ctrl+alt+d",
         "hotkey_capture": "ctrl+alt+q",
@@ -23,6 +25,7 @@ class Config:
         "minimize_to_tray": True,
         "fill_input_on_select": False,
         "offline_mode": False,
+        "wordbook_group_id": 1,
     }
 
     def __init__(self, path: Path):

@@ -3,23 +3,24 @@
 import html as _html
 import json
 import re as _re
+import sys
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, QUrl, Signal
 from PySide6.QtWidgets import (
-    QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-    QMainWindow, QMessageBox, QSplitter, QStatusBar, QTabBar,
+    QComboBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget,
+    QListWidgetItem, QMainWindow, QMessageBox, QSplitter, QStatusBar, QTabBar,
     QToolButton, QVBoxLayout, QWidget,
 )
 from PySide6.QtWebEngineCore import (
-    QWebEnginePage, QWebEngineProfile, QWebEngineSettings,
+    QWebEnginePage, QWebEngineProfile, QWebEngineScript, QWebEngineSettings,
     QWebEngineUrlRequestInterceptor,
 )
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from urllib.parse import unquote
 
 from ..core.query import DictionaryService, EntryResult
-from ..core.wordbook import WordBook
+from ..core.wordbook import DEFAULT_GROUP_ID, WordBook
 from ..core import dict_config
 from ..config import Config
 from .dict_manager_dialog import DictManagerDialog
@@ -169,7 +170,8 @@ def welcome_page() -> str:
 <li>点击右上角<b>「词库」</b>添加 <code>.mdx</code> 文件，或直接选择
 <b>词库文件夹</b>（自动扫描其中全部词库）—— 即加即用，无需导入</li>
 <li>在上方搜索框输入单词，回车查词，左侧列表为实时联想</li>
-<li>点 <b>★</b> 将当前词条加入生词本，点<b>「生词本」</b>查看与复习</li>
+<li>点 <b>★</b> 把当前词条收藏到右侧选中的<b>生词本分组</b>，
+点<b>「生词本」</b>按分组查看与整理（一个词可同时属于多个分组）</li>
 <li><b>「置顶」</b>可让窗口常驻最前；关闭窗口默认最小化到系统托盘</li>
 <li>默认全局快捷键：<code>Ctrl+Alt+D</code> 显示/隐藏窗口，
 <code>Ctrl+Alt+Q</code> 屏幕划词取词（可在设置中修改）</li>
@@ -243,6 +245,31 @@ class DictPage(QWebEnginePage):
 
     entryLink = Signal(str)
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # 注入全局 applyTheme：部分词库（如欧陆系）的词条 HTML 自带脚本，会调用
+        # applyTheme() 套用明暗主题；本应用使用固定 CSS、并未提供该函数，直接调用
+        # 会抛 ReferenceError。这里在文档创建时注入一个空实现，使其调用安全无害。
+        script = QWebEngineScript()
+        script.setName("tinydict-globals")
+        script.setInjectionPoint(QWebEngineScript.InjectionPoint.DocumentCreation)
+        script.setWorldId(QWebEngineScript.ScriptWorldId.MainWorld)
+        script.setRunsOnSubFrames(False)
+        script.setSourceCode(
+            "window.applyTheme=window.applyTheme||function(mode){"
+            "try{document.documentElement.setAttribute('data-theme',"
+            "(mode==='dark'?'dark':'light'));}catch(e){}};"
+        )
+        self.scripts().insert(script)
+
+    def javaScriptConsoleMessage(self, level, message, lineNumber, sourceID):
+        # 仅打印 Error 级别，屏蔽词库自身的 console.log / console.info 调试噪音。
+        # 旧默认实现会把所有 JS 控制台消息（含普通调试）打到 stderr，前缀 "js:"。
+        if level != QWebEnginePage.JavaScriptConsoleMessageLevel.ErrorMessageLevel:
+            return
+        src = f" ({sourceID}:{lineNumber})" if sourceID else ""
+        print(f"[JS错误]{src} {message}", file=sys.stderr)
+
     def acceptNavigationRequest(self, url, nav_type, is_main):
         scheme = url.scheme()
         if scheme == "entry":
@@ -295,6 +322,12 @@ QTabBar::tab:selected{background:#fff;color:#1d4ed8;
     border:1px solid #e5e7eb;border-bottom:1px solid #fff;}
 QStatusBar{color:#6b7280;}
 QStatusBar QLabel{padding:0 10px;}
+QComboBox#group_combo{
+    border:1px solid #d1d5db;border-radius:13px;padding:3px 10px;
+    font-size:13px;background:#fff;color:#374151;
+}
+QComboBox#group_combo:hover{border-color:#2563eb;}
+QComboBox#group_combo::drop-down{border:none;width:16px;}
 """
 
 
@@ -323,6 +356,9 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(APP_QSS)
 
         self._build_ui()
+        # 顶栏分组下拉框（★ 的归属分组）；生词变化时同步刷新计数
+        self._reload_groups()
+        self.wordbook_changed.connect(self._reload_groups)
         self._view.setHtml(welcome_page(), QUrl("mdx://0/"))
         self._suggest_timer = QTimer(self, singleShot=True, interval=250)
         self._suggest_timer.timeout.connect(self._refresh_suggestions)
@@ -332,6 +368,9 @@ class MainWindow(QMainWindow):
         self._mount_total = 0
         self._service.mount_progress.connect(self._on_mount_progress)
         self._service.dict_mounted.connect(self._on_dict_mounted)
+        self._service.dict_mount_failed.connect(
+            lambda _id, _msg: self._refresh_dict_status())
+        self._service.mount_finished.connect(self._refresh_dict_status)
 
         # 词库后台挂载进度/完成（挂载式架构）
         self._mount_total = 0
@@ -369,9 +408,18 @@ class MainWindow(QMainWindow):
         top.addWidget(self.search_edit, stretch=1)
 
         self._btn_star = QToolButton(text="☆", checkable=True)
-        self._btn_star.setToolTip("加入/移出生词本")
+        self._btn_star.setToolTip("加入/移出当前分组")
         self._btn_star.clicked.connect(self._on_star)
         top.addWidget(self._btn_star)
+
+        # 生词本分组选择：★ 收录的词进入这里选中的分组
+        self.group_combo = QComboBox(objectName="group_combo")
+        self.group_combo.setToolTip("点 ★ 时把当前词条加入的分组")
+        self.group_combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToContents)
+        self.group_combo.setMaximumWidth(180)
+        self.group_combo.currentIndexChanged.connect(self._on_group_combo_changed)
+        top.addWidget(self.group_combo)
 
         self._btn_pin = QToolButton(text="置顶", checkable=True)
         self._btn_pin.setToolTip("窗口常驻最前")
@@ -389,13 +437,12 @@ class MainWindow(QMainWindow):
             top.addWidget(b)
         root.addLayout(top)
 
-        # ---- 词典切换（多部词库命中时显示）
+        # ---- 词典切换（多部词库命中时显示在词条页上方）
         self._tabs = QTabBar()
         self._tabs.setExpanding(False)
         self._tabs.setUsesScrollButtons(True)
         self._tabs.currentChanged.connect(self._render_current)
         self._tabs.hide()
-        root.addWidget(self._tabs)
 
         # ---- 左建议列表 + 右词条渲染
         self.suggest_list = QListWidget(objectName="suggest_list")
@@ -427,9 +474,18 @@ class MainWindow(QMainWindow):
         self._view = QWebEngineView()
         self._view.setPage(self._page)
 
+        # 词条页容器：顶部词典切换标签 + 下方词条内容，使切换标签成为
+        # 词条页的页头（只压在词条内容上方，不再横跨左侧联想列表）
+        entry_page = QWidget()
+        entry_vbox = QVBoxLayout(entry_page)
+        entry_vbox.setContentsMargins(0, 0, 0, 0)
+        entry_vbox.setSpacing(0)
+        entry_vbox.addWidget(self._tabs)
+        entry_vbox.addWidget(self._view)
+
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(self.suggest_list)
-        splitter.addWidget(self._view)
+        splitter.addWidget(entry_page)
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
         splitter.setSizes([230, 750])
@@ -440,6 +496,9 @@ class MainWindow(QMainWindow):
         # ---- 状态栏
         status = QStatusBar()
         self._status_dict = QLabel("未加载词库")
+        self._status_dict.setTextFormat(Qt.TextFormat.RichText)
+        self._status_dict.setOpenExternalLinks(False)
+        self._status_dict.linkActivated.connect(self.open_dict_manager)
         self._status_info = QLabel("")
         status.addWidget(self._status_dict)
         status.addPermanentWidget(self._status_info)
@@ -629,25 +688,105 @@ class MainWindow(QMainWindow):
         self._btn_fwd.setEnabled(
             self._hist_pos < len(self._history) - 1)
 
+    # ------------------------------------------------------------ 生词本分组
+    def _reload_groups(self):
+        """重建顶栏分组下拉框（保持当前选中的分组）。"""
+        gid = self._selected_group_id()
+        self.group_combo.blockSignals(True)
+        self.group_combo.clear()
+        index = 0
+        for i, g in enumerate(self.wordbook.groups()):
+            self.group_combo.addItem(f"{g.name}（{g.count}）", g.id)
+            # 分组名单独存一份，避免从带计数的显示文本里反解
+            self.group_combo.setItemData(i, g.name, Qt.ItemDataRole.ToolTipRole)
+            if g.id == gid:
+                index = i
+        self.group_combo.addItem("＋ 新建分组…", -1)
+        self.group_combo.setCurrentIndex(index)
+        self.group_combo.blockSignals(False)
+        self._update_star()
+
+    def _selected_group_id(self) -> int:
+        """当前选中的分组 id；未选中（如停在「新建分组…」）时回退到配置值。"""
+        gid = self.group_combo.currentData()
+        if isinstance(gid, int) and gid > 0:
+            return gid
+        try:
+            saved = int(self._config["wordbook_group_id"])
+        except (TypeError, ValueError):
+            saved = DEFAULT_GROUP_ID
+        return saved if saved > 0 else DEFAULT_GROUP_ID
+
+    def _selected_group_name(self) -> str:
+        idx = self.group_combo.currentIndex()
+        name = self.group_combo.itemData(idx, Qt.ItemDataRole.ToolTipRole)
+        if name:
+            return str(name)
+        # 停在「＋ 新建分组…」等非常规项时，按实际选中的分组 id 反查名字
+        return self.wordbook.group_name(self._selected_group_id()) or "生词本"
+
+    def _on_group_combo_changed(self, index: int):
+        gid = self.group_combo.itemData(index)
+        if gid == -1:                     # 「＋ 新建分组…」
+            self._create_group()
+            return
+        if isinstance(gid, int) and gid > 0:
+            self._config["wordbook_group_id"] = gid
+            self._config.save()
+        self._update_star()
+
+    def _create_group(self):
+        name, ok = QInputDialog.getText(self, "新建分组", "分组名称：")
+        if not ok or not (name or "").strip():
+            self._reload_groups()          # 取消：回到之前选中的分组
+            return
+        name = name.strip()
+        group = self.wordbook.add_group(name)
+        if group is None:
+            QMessageBox.warning(self, "新建分组", f"分组「{name}」已存在。")
+            self._reload_groups()
+            return
+        self._config["wordbook_group_id"] = group.id
+        self._config.save()
+        self._reload_groups()
+        self._status_info.setText(f"已新建分组：{name}")
+        self.wordbook_changed.emit()       # 已打开的生词本窗口同步刷新
+
     # ---------------------------------------------------------------- 生词
     def _update_star(self):
+        gid = self._selected_group_id()
+        gname = self._selected_group_name()
         self._btn_star.blockSignals(True)
-        self._btn_star.setChecked(bool(self._current_word)
-                                  and self.wordbook.has(self._current_word))
-        self._btn_star.setText("★" if self._btn_star.isChecked() else "☆")
+        in_group = bool(self._current_word) and self.wordbook.has(
+            self._current_word, gid)
+        self._btn_star.setChecked(in_group)
+        self._btn_star.setText("★" if in_group else "☆")
         self._btn_star.blockSignals(False)
+
+        action = f"点 ★ 加入 / 移出分组「{gname}」"
+        if self._current_word:
+            names = self.wordbook.groups_of(self._current_word)
+            self._btn_star.setToolTip(
+                (f"所属分组：{'、'.join(names)}\n" if names else "")
+                + action
+            )
+        else:
+            self._btn_star.setToolTip(action)
 
     def _on_star(self, checked: bool):
         if not self._current_word:
             return
+        word = self._current_word
+        gid = self._selected_group_id()
+        gname = self._selected_group_name()
         if checked:
-            if self.wordbook.add(self._current_word):
-                self._status_info.setText(
-                    f"已加入生词本：{self._current_word}")
+            if self.wordbook.add(word, gid):
+                self._status_info.setText(f"已加入「{gname}」：{word}")
+            else:
+                self._status_info.setText(f"{word} 已在「{gname}」中")
         else:
-            self.wordbook.remove(self._current_word)
-            self._status_info.setText(
-                f"已从生词本移除：{self._current_word}")
+            self.wordbook.remove_from_group(word, gid)
+            self._status_info.setText(f"已从「{gname}」移除：{word}")
         self._update_star()
         self.wordbook_changed.emit()
 
@@ -677,16 +816,32 @@ class MainWindow(QMainWindow):
         if not dicts:
             self._status_dict.setText(
                 "未启用任何词库，点击「词库」添加 .mdx 文件或词库文件夹")
+            self._status_dict.setToolTip("")
             return
         mounted = sum(1 for d in dicts if self._service.is_mounted(d.id))
-        total_entries = sum(d.entry_count for d in dicts)
-        if mounted < len(dicts):
+        missing = [d for d in dicts
+                   if self._service.mount_status(d.id) == "missing"]
+        total_entries = sum(d.entry_count for d in dicts
+                            if self._service.is_mounted(d.id))
+        if missing:
+            names = "、".join(d.name for d in missing)
             self._status_dict.setText(
-                f"词库加载中 {mounted}/{len(dicts)} 部 "
-                f"· 已就绪 {total_entries:,} 词条")
+                f"⚠ {len(missing)} 部词库文件缺失或无法加载，"
+                f"<a href='manage'>点击「词库管理」查看并修复</a>")
+            self._status_dict.setToolTip(
+                "缺失词库：" + names + "\n"
+                "（通常是文件夹被改名 / 移动后路径失效）\n"
+                "打开「词库管理」选中后点「修复路径…」重新指定 .mdx 文件")
+        elif mounted < len(dicts):
+            loading = len(dicts) - mounted
+            self._status_dict.setText(
+                f"词库加载中 {mounted}/{len(dicts)} 部"
+                f"（{loading} 部加载中） · 已就绪 {total_entries:,} 词条")
+            self._status_dict.setToolTip("")
         else:
             self._status_dict.setText(
                 f"已启用 {len(dicts)} 部词库 · {total_entries:,} 词条")
+            self._status_dict.setToolTip("")
 
     def _on_mount_progress(self, done: int, total: int, name: str):
         self._mount_done, self._mount_total = done, total
@@ -708,7 +863,11 @@ class MainWindow(QMainWindow):
                 self.bring_up_and_lookup)
             self.wordbook_changed.connect(
                 self._wordbook_dialog.refresh_if_visible)
-        self._wordbook_dialog.refresh()
+            # 生词本窗口里改了分组 / 增删了生词 → 同步顶栏下拉框与 ★
+            self._wordbook_dialog.groupsChanged.connect(self._reload_groups)
+            self._wordbook_dialog.wordsChanged.connect(self._update_star)
+        # 打开时定位到顶栏当前选中的分组
+        self._wordbook_dialog.select_group(self._selected_group_id())
         self._wordbook_dialog.show()
         self._wordbook_dialog.raise_()
         self._wordbook_dialog.activateWindow()
