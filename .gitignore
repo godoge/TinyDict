@@ -27,3 +27,13 @@ dist/
 # Internal / Debug
 .workbuddy/
 .tmpwheels/
+
+# 用户数据兜底（正常情况下数据都在 ~/.tinydict，不进项目；
+# 以下仅作保险，防止有人把数据库/配置误拷进项目后被提交）
+*.db
+config.json
+
+# 发布包（由 build.bat 生成，体积大，应通过 GitHub Releases 发布，
+# 不进 git 仓库；GitHub 单文件上限 100MB，211MB 的 zip 会被拒）
+TinyDict-*.zip
+

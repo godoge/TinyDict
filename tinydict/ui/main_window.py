@@ -22,6 +22,7 @@ from urllib.parse import unquote
 from ..core.query import DictionaryService, EntryResult
 from ..core.wordbook import DEFAULT_GROUP_ID, WordBook
 from ..core import dict_config
+from .. import __version__
 from ..config import Config
 from .dict_manager_dialog import DictManagerDialog
 from .resource_inliner import inline_resources
@@ -351,7 +352,7 @@ class MainWindow(QMainWindow):
         self._wordbook_dialog = None
         self._dict_dialog = None
 
-        self.setWindowTitle("TinyDict 离线词典")
+        self.setWindowTitle(f"TinyDict 离线词典 v{__version__}")
         self.resize(980, 680)
         self.setStyleSheet(APP_QSS)
 
