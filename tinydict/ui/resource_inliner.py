@@ -353,57 +353,68 @@ _CACHE_MAX = 1024
 
 # 发音链接：<a href="sound://xxx.mp3"> 是部分词典使用的私有协议，浏览器无法识别、点击无反应。
 # 这里把整段 href 改写为 href="#" + data-snd="mdx://<dict_id>/<file>" + onclick，
-# 点击时由内联 JS 创建一个 <audio> 元素并把 src 指向 mdx:// 资源后播放。
+# 点击时由内联 JS 创建一个 <audio> 元素并播放。
 #
-# 为什么用 mdx:// 而不是再接 Python：
-#   - mdx:// 是已注册且在用的「安全 scheme」，scheme_handler 会以 audio/mpeg 等
-#     正确 MIME 返回音频字节，并自带跨词库回退（TLD 没有的音频会去 OALDPEX 的
-#     MDD 找同名 mp3）从而命中；
+# ⚠️ 关键修复：音频【绝不再】以 base64 data URI 内联进词条 HTML。
+#   原因（这是「某些单词不显示」的直接根因）：
+#     OALDPEX 等词典的高频短词（for / work / get …）一个词条内嵌 100~200 个发音 /
+#     例句音频引用；若全部 base64 内联，单条 HTML 可达 1.5~2.8 MiB，超过 Chromium
+#     经 setHtml(data:URL) 加载的体积上限，导致该词条页「静默空白」——用户看到的
+#     就是「某些单词不显示」。the / much / hour 等词条音频引用少（≤68），内联后
+#     体积仍在 2 MiB 内，所以能正常显示。这是数量差异、与具体词库无关。
+#   修复做法：词条 HTML 里 data-snd 只放一个极小的 mdx:// 地址；真正取字节是点击时
+#     才发生（见下方 onclick），因此 HTML 体积恒定很小，彻底消除该上限问题。
+#
+# 为什么点击时 fetch(mdx://)→Blob 播放，而不直接 <audio src="mdx://…">：
+#   - 直接把自定义 scheme 当媒体 src 在部分 Chromium 版本下加载脆弱（这正是当初资源
+#     改为内联的初衷）；但 fetch 取字节再包成 blob: URL 播放则不受此影响；
+#   - mdx:// 是已注册且为「安全 scheme」的地址，scheme_handler 以 audio/mpeg 等正确
+#     MIME 返回字节，并自带跨词库回退（本词库没有的音频会去其它词库 MDD 找同名 mp3）；
 #   - href="#" + onclick 内 return false 彻底阻止导航，词条页不会被替换成空白页；
 #   - 播放交给浏览器原生 <audio> 元素，不经过 Python，因此不依赖在 PySide6 6.11
-#     中已被移除的 addToJavaScriptWindowObject / javaScriptWindowObjectCleared
-#     （旧式 JS 桥接接口），从根本上绕开「点击崩溃 / 页面消失」两类故障。
+#     中已被移除的 addToJavaScriptWindowObject（旧式 JS 桥接接口），从根本上绕开
+#     「点击崩溃 / 页面消失」两类故障。
 # 只匹配 <a> 上的 href 属性（不限定引号类型）
 _SOUND_HREF_RE = re.compile(
     r'href\s*=\s*(["\'])sound://([^"\']*)\1', re.IGNORECASE
 )
 
 
-def _rewrite_sound_links(html: str, dict_id: int, service: DictionaryService) -> str:
+def _rewrite_sound_links(html: str, dict_id: int, service: DictionaryService = None) -> str:
     if "sound://" not in html:
         return html
 
-    # 点击时复用页面内唯一的 <audio> 节点播放；data-snd 存放音频地址。
-    # onclick 内 JS 字符串统一用双引号，外层 onclick 属性用单引号包裹，二者不冲突。
+    # 点击时复用页面内唯一的 <audio> 节点播放。data-snd 里只是 mdx:// 地址（极小），
+    # 真正取字节发生在点击时：先 fetch 出字节包成 Blob URL（绕开自定义 scheme 媒体
+    # 加载的兼容性隐患），失败再退回到直接把 mdx:// 设为 src 的兜底做法。
+    # onclick 内 JS 用双引号，外层 onclick 属性用单引号包裹，二者不冲突。
     onclick = (
         'var a=document.getElementById("sd_audio");'
         'if(!a){a=document.createElement("audio");a.id="sd_audio";'
         'document.body.appendChild(a);}'
-        'a.src=this.getAttribute("data-snd");'
-        'var p=a.play();'
-        'if(p&&p.catch){p.catch(function(e){console.error("sd-audio-fail",e);});}'
+        'var url=this.getAttribute("data-snd");'
+        'if(!url)return false;'
+        # 回收上一次的 Blob URL，避免内存泄漏
+        'if(a._obj){try{URL.revokeObjectURL(a._obj);}catch(e){}}'
+        'function play(){var p=a.play();'
+        'if(p&&p.catch){p.catch(function(e){console.error("sd-audio-fail",e);});}}'
+        # 首选：fetch 取字节 → Blob URL 播放（最稳，不受 scheme 媒体兼容性影响）
+        'fetch(url).then(function(r){return r.blob();}).then(function(b){'
+        'a._obj=URL.createObjectURL(b);a.src=a._obj;play();'
+        '}).catch(function(e){'
+        # 兜底：直接以 mdx:// 作为媒体 src（个别 Chromium 版本 fetch 受限时仍能播）
+        'console.error("sd-audio-fetch-fail",e);a.src=url;play();});'
         'return false;'
     )
 
     def _sub(m):
-        rest = m.group(2)  # 文件名（不含 sound:// 协议头，如 _apple%23_brs_2.mp3）
-        # 部分词典把文件名里的特殊字符做了 URL 编码（如 # -> %23），而 MDD 内真实
-        # 文件名是字面 _apple#_brs_2.mp3；必须先 unquote 才能命中 find_resource /
-        # 后续 mdx:// 回退。这才是例句喇叭「点不动」的根因：之前按编码后的
-        # _apple%23_brs_2.mp3 去查，永远查不到。
-        fname = unquote(rest)
-        # 优先把音频以 data URI 内联：data: 协议在所有 Chromium 版本中都能被 <audio>
-        # 可靠播放，彻底绕开「自定义 scheme 媒体加载」的兼容性隐患；音频字节由
-        # find_resource 取（自带跨词库回退：TLD 没有的会去 OALDPEX 的 MDD 找）。
-        # 找不到（如 TLD 风格的次要发音 OALDPEX 没有）则回退为 mdx:// 地址
-        # （保留原始编码，避免 # 被当成 URL fragment 截断路径）。
-        data = service.find_resource(dict_id, fname)
-        if data:
-            mime = guess_mime(fname)
-            src = "data:%s;base64,%s" % (mime, base64.b64encode(data).decode("ascii"))
-        else:
-            src = "mdx://%d/%s" % (dict_id, rest)
-        # data-snd 用双引号；data URI 仅含 base64 安全字符，安全。onclick 单引号包裹。
+        # 文件名（含 sound:// 协议头后的部分，如 _apple%23_brs_2.mp3）。
+        # 保留原始编码写入 mdx:// 地址：# 在 URL 中是 fragment 分隔符，必须保持
+        # %23 编码，否则路径会被截断；点击时 scheme_handler 会 unquote 后到 MDD
+        # 里查 _apple#_brs_2.mp3，跨词库回退也能命中。
+        rest = m.group(2)
+        src = "mdx://%d/%s" % (dict_id, rest)
+        # data-snd 用双引号（mdx:// 地址仅含安全字符）。onclick 单引号包裹。
         return 'href="#" data-snd="%s" onclick=\'%s\'' % (src, onclick)
 
     return _SOUND_HREF_RE.sub(_sub, html)

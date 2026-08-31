@@ -2,15 +2,17 @@
 
 import html as _html
 import json
+import os
 import re as _re
 import sys
 from pathlib import Path
 
+from PySide6.QtGui import QClipboard, QGuiApplication
 from PySide6.QtCore import Qt, QTimer, QUrl, Signal
 from PySide6.QtWidgets import (
     QComboBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget,
-    QListWidgetItem, QMainWindow, QMessageBox, QSplitter, QStatusBar, QTabBar,
-    QToolButton, QVBoxLayout, QWidget,
+    QListWidgetItem, QMainWindow, QMenu, QMessageBox, QSplitter, QStatusBar,
+    QTabBar, QToolButton, QVBoxLayout, QWidget,
 )
 from PySide6.QtWebEngineCore import (
     QWebEnginePage, QWebEngineProfile, QWebEngineScript, QWebEngineSettings,
@@ -193,6 +195,23 @@ def not_found_page(word: str) -> str:
     )
 
 
+def loading_page(word: str, pending: int) -> str:
+    """仍有词库在后台加载时的占位页。
+
+    词库挂载是异步的，加载期间直接显示「未找到词条」会误导用户
+    （实际是还没查，而不是查不到）。这里明确告知状态，加载完成后
+    MainWindow 会自动重新查询并替换本页。
+    """
+    n = max(1, int(pending))
+    return _page(
+        f'<div class="sd-headword">{_esc(word)}</div>'
+        '<div class="sd-notfound">'
+        f"<p><b>还有 {n} 部词库正在加载…</b></p>"
+        "<p>已加载完的词库里没有找到该词条，加载完成后会自动重新查询。</p>"
+        "</div>"
+    )
+
+
 # ----------------------------------------------------------------------
 # WebEngine 页面与离线拦截
 # ----------------------------------------------------------------------
@@ -302,6 +321,64 @@ class DictPage(QWebEnginePage):
         return super().acceptNavigationRequest(url, nav_type, is_main)
 
 
+class EntryView(QWebEngineView):
+    """词条视图：接管右键菜单。
+
+    原生菜单只有「复制 / 全选 / 后退」等通用项，这里额外加一条
+    「搜索「xxx」」——在释义里选中任意词后右键即可直接查它，
+    免去手动复制到搜索框的步骤。
+
+    注意：重写 contextMenuEvent 且不调用基类实现，因此默认菜单不会出现，
+    下面把常用项（复制 / 后退 / 重新加载 / 全选）一并保留，功能不减。
+    """
+
+    search_requested = Signal(str)
+
+    # 菜单标签的最大显示长度，过长会截断，避免撑爆菜单宽度
+    LABEL_MAX = 24
+
+    def contextMenuEvent(self, event):
+        page = self.page()
+        if page is None:
+            return
+
+        # 归一化空白：释义里跨行选中会带换行符，压成单个空格才能正常查词
+        sel = " ".join((page.selectedText() or "").split())
+
+        menu = QMenu(self)
+        act_search = None
+        if sel:
+            label = (sel if len(sel) <= self.LABEL_MAX
+                     else sel[:self.LABEL_MAX] + "…")
+            act_search = menu.addAction(f"搜索「{label}」")
+            menu.addAction("复制", lambda: self._copy(sel))
+            menu.addSeparator()
+
+        act_back = menu.addAction("后退")
+        # setHtml 也会进历史，故以 action 的可用状态为准
+        act_back.setEnabled(page.action(QWebEnginePage.WebAction.Back).isEnabled())
+        act_reload = menu.addAction("重新加载")
+        menu.addSeparator()
+        act_all = menu.addAction("全选")
+
+        chosen = menu.exec(event.globalPos())
+        if chosen is None:
+            return
+        if chosen is act_search:
+            self.search_requested.emit(sel)
+        elif chosen is act_back:
+            page.triggerAction(QWebEnginePage.WebAction.Back)
+        elif chosen is act_reload:
+            page.triggerAction(QWebEnginePage.WebAction.Reload)
+        elif chosen is act_all:
+            page.triggerAction(QWebEnginePage.WebAction.SelectAll)
+
+    @staticmethod
+    def _copy(text: str):
+        clipboard = QGuiApplication.clipboard()
+        clipboard.setText(text, QClipboard.Mode.Clipboard)
+
+
 # ----------------------------------------------------------------------
 # 主窗口
 # ----------------------------------------------------------------------
@@ -336,6 +413,7 @@ class MainWindow(QMainWindow):
     settings_saved = Signal()      # 设置已保存（app 层据此重绑快捷键）
     wordbook_changed = Signal()    # 生词本内容变化
     dicts_changed = Signal()       # 词库增删/顺序变化（由管理对话框发出）
+    quit_requested = Signal()      # 要求彻底退出进程（未启用"最小化到托盘"时点关闭）
 
     def __init__(self, service: DictionaryService, config: Config,
                  wordbook: WordBook, parent=None):
@@ -345,6 +423,10 @@ class MainWindow(QMainWindow):
         self.wordbook = wordbook
         self._results: list[EntryResult] = []
         self._current_word = ""
+        # 上一次查词时"已挂载完成、实际参与查询"的词库 id 集合。
+        # 词库是后台异步挂载的：若查词时某部词库尚未挂载完，它不会出现在结果里；
+        # 该词库挂载完成后需要据此判断"本次结果不完整"并自动重查补齐。
+        self._queried_dict_ids: set[int] = set()
         self._history: list[str] = []
         self._hist_pos = -1
         self._tray = None               # 由 app 层注入
@@ -472,8 +554,10 @@ class MainWindow(QMainWindow):
         settings.setAttribute(
             QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls, True)
 
-        self._view = QWebEngineView()
+        self._view = EntryView()
         self._view.setPage(self._page)
+        # 右键「搜索「xxx」」：以选中的文本直接查词
+        self._view.search_requested.connect(self.do_lookup)
 
         # 词条页容器：顶部词典切换标签 + 下方词条内容，使切换标签成为
         # 词条页的页头（只压在词条内容上方，不再横跨左侧联想列表）
@@ -572,13 +656,16 @@ class MainWindow(QMainWindow):
             return
 
     def do_lookup(self, word: str, push_history: bool = True,
-                  sync_input: bool = True):
+                  sync_input: bool = True, preserve_tab: bool = False):
         """查词并渲染。
 
         sync_input=True 时把词条写入上方搜索框，并刷新左侧候选列表
         （历史/回车/词条内互链等默认路径保持 True）；
         左侧候选点击受设置 fill_input_on_select 控制，关闭时为 False，
         此时只显示释义、不改变搜索框，也避免候选列表被无谓刷新。
+
+        preserve_tab=True 时保留当前选中的词典标签页（用于"词库挂载完成后
+        自动重查补齐"，避免把用户正在看的那一页跳回第一个）。
         """
         word = (word or "").strip()
         if not word:
@@ -590,16 +677,30 @@ class MainWindow(QMainWindow):
             self.search_edit.setText(word)
             self.search_edit.blockSignals(False)
 
+        # 记录本次实际参与查询的词库（只有已挂载完成的才参与），
+        # 供后续「新词库挂载完成 → 结果是否不完整」的判断使用。
+        self._queried_dict_ids = {
+            d.id for d in self._service.enabled_dicts()
+            if self._service.is_mounted(d.id)
+        }
+
+        pending = self._pending_mount_count()
         self._results = self._service.lookup(word)
         if self._results:
-            self._setup_tabs()
+            self._setup_tabs(preserve_current=preserve_tab)
             self._render_current()
         else:
             self._tabs.blockSignals(True)
             self._tabs.hide()
             self._tabs.blockSignals(False)
-            self._view.setHtml(not_found_page(word), QUrl("mdx://0/"))
-            self._status_info.setText("未找到词条")
+            if pending:
+                self._view.setHtml(loading_page(word, pending),
+                                   QUrl("mdx://0/"))
+                self._status_info.setText(
+                    f"还有 {pending} 部词库正在加载，完成后自动重新查询")
+            else:
+                self._view.setHtml(not_found_page(word), QUrl("mdx://0/"))
+                self._status_info.setText("未找到词条")
 
         if push_history:
             self._push_history(word)
@@ -609,15 +710,31 @@ class MainWindow(QMainWindow):
         if sync_input:
             self._suggest_timer.start()
 
-    def _setup_tabs(self):
+    def _setup_tabs(self, preserve_current: bool = False):
+        # 重查补齐时保留用户正在看的那一页，避免被跳回第一个词典
+        prev = self._tabs.currentIndex() if preserve_current else 0
         self._tabs.blockSignals(True)
         while self._tabs.count() > 0:
             self._tabs.removeTab(0)
         for r in self._results:
             self._tabs.addTab(r.dict_name)
         self._tabs.setVisible(len(self._results) > 1)
-        self._tabs.setCurrentIndex(0)
+        if preserve_current and 0 <= prev < len(self._results):
+            self._tabs.setCurrentIndex(prev)
+        else:
+            self._tabs.setCurrentIndex(0)
         self._tabs.blockSignals(False)
+
+    def _pending_mount_count(self) -> int:
+        """尚未挂载完成的启用词库数量（挂载是后台异步进行的）。"""
+        return sum(
+            1 for d in self._service.enabled_dicts()
+            if not self._service.is_mounted(d.id)
+        )
+
+    def _current_result(self):
+        idx = max(self._tabs.currentIndex(), 0)
+        return self._results[min(idx, len(self._results) - 1)]
 
     def _render_current(self):
         if not self._results:
@@ -633,18 +750,28 @@ class MainWindow(QMainWindow):
         self._view.setHtml(entry_page(raw, r.word),
                            QUrl(f"mdx://{r.dict_id}/"))
         others = len(self._results) - 1
-        self._status_info.setText(
-            f"词典：{r.dict_name}"
-            + (f" · 另有 {others} 部词库命中" if others > 0 else "")
-        )
-        # 调试：把当前词条处理前后的 HTML 与资源诊断保存到项目目录
-        if r.word.lower() in ("obvious",):
+        pending = self._pending_mount_count()
+        msg = f"词典：{r.dict_name}"
+        if others > 0:
+            msg += f" · 另有 {others} 部词库命中"
+        if pending:
+            # 结果尚不完整，必须提示，否则用户会以为"这个词库查不到"。
+            # 注意这里不能用 elif：命中多部词库的同时仍可能有词库在加载，
+            # 那种情况下结果同样是不完整的。
+            msg += f" · 另有 {pending} 部词库仍在加载，完成后自动补齐"
+        self._status_info.setText(msg)
+
+        # 调试：把词条处理前后的 HTML 与资源诊断落盘。
+        # 由环境变量指定要调试的词（不写死任何词典/单词）：
+        #   set TINYDICT_DEBUG_WORD=for
+        _dbg_word = os.environ.get("TINYDICT_DEBUG_WORD", "").strip().lower()
+        if _dbg_word and r.word.lower() == _dbg_word:
             from .resource_inliner import _MISS_LOG
             debug_dir = Path(__file__).resolve().parent.parent.parent / ".tmpwheels"
             debug_dir.mkdir(exist_ok=True)
-            (debug_dir / "debug_obvious_before.html").write_text(
+            (debug_dir / f"debug_{r.dict_id}_before.html").write_text(
                 r.html() or "", encoding="utf-8", errors="ignore")
-            (debug_dir / "debug_obvious_after.html").write_text(
+            (debug_dir / f"debug_{r.dict_id}_after.html").write_text(
                 raw or "", encoding="utf-8", errors="ignore")
             # 资源诊断：未命中的引用 + MDD 实际 key 列表
             mount = self._service._mounts.get(r.dict_id)
@@ -853,9 +980,21 @@ class MainWindow(QMainWindow):
 
     def _on_dict_mounted(self, dict_id: int):
         self._refresh_dict_status()
-        # 挂载完成前发起的查询（结果为空）自动重查
-        if self._current_word and not self._results:
-            self.do_lookup(self._current_word, push_history=False)
+        # 词库是后台异步挂载的，挂载完成顺序不确定。若当前这次查词发生时
+        # 该词库还没挂载完，它就不会出现在结果里——此时结果是不完整的，
+        # 需要在它挂载完成后自动重查补齐（保留用户正在看的词典页）。
+        #
+        # 判断依据是「该词库是否参与了上一次查词」，而不是「结果是否为空」：
+        # 后者只在所有词库都没命中时才重查，会导致「TLD 先命中、OALDPEX
+        # 后挂载完」时 OALDPEX 的标签页永远不出现，只能手动重新搜索。
+        if not self._current_word:
+            return
+        if dict_id in self._queried_dict_ids:
+            return  # 已参与过上次查询，结果本就完整
+        if not any(d.id == dict_id for d in self._service.enabled_dicts()):
+            return  # 该词库已被禁用/移除，无需重查
+        self.do_lookup(self._current_word, push_history=False,
+                       preserve_tab=True)
 
     def open_wordbook(self):
         if self._wordbook_dialog is None:
@@ -908,3 +1047,7 @@ class MainWindow(QMainWindow):
                 self._tray.notify_minimized()
         else:
             event.accept()
+            # 未启用"最小化到托盘"：仅 accept 只是关掉窗口本身，而 app 层设了
+            # setQuitOnLastWindowClosed(False)，事件循环与托盘图标仍会驻留，
+            # 必须由 app 层真正退出进程。
+            self.quit_requested.emit()

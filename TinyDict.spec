@@ -23,6 +23,7 @@ exe = EXE(
     [],
     exclude_binaries=True,
     name='TinyDict',
+    icon='assets/icon.ico',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

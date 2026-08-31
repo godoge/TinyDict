@@ -32,7 +32,7 @@ class TrayController(QObject):
         act_wb.triggered.connect(app.window.open_wordbook)
         menu.addSeparator()
         act_exit = menu.addAction("退出")
-        act_exit.triggered.connect(QApplication.instance().quit)
+        act_exit.triggered.connect(app.quit_app)
         self._tray.setContextMenu(menu)
 
         self._tray.activated.connect(self._on_activated)
@@ -49,6 +49,14 @@ class TrayController(QObject):
     def notify_minimized(self):
         self.notify("已最小化到系统托盘，右键托盘图标可选择退出。")
 
+    def hide_icon(self):
+        """隐藏托盘图标。
+
+        退出前必须调用：Windows 上若进程退出时图标仍可见，图标会残留在托盘区，
+        要等鼠标划过才消失，看起来像"没关掉"。
+        """
+        self._tray.hide()
+
     def apply_config(self):
         # 托盘行为无动态配置项；保留接口供后续扩展
         pass
@@ -62,6 +70,9 @@ class TrayController(QObject):
 class TinyDictApp:
     def __init__(self, qapp: QApplication):
         self.qapp = qapp
+        # 应用级图标：同时驱动主窗口标题栏与 Windows 任务栏图标。
+        # 托盘图标在 TrayController 中单独设置，此处不必重复。
+        self.qapp.setWindowIcon(app_icon())
 
         # 数据层
         self.config = Config(config_path())
@@ -85,6 +96,7 @@ class TinyDictApp:
         self.service.mount_all_async()
 
     def _wire(self):
+        self.window.quit_requested.connect(self.quit_app)
         self.hotkeys.toggleRequested.connect(self.toggle_window)
         self.hotkeys.captureRequested.connect(self.capture.capture_now)
         self.hotkeys.errorOccurred.connect(
@@ -104,6 +116,15 @@ class TinyDictApp:
             w.show()
             w.raise_()
             w.activateWindow()
+
+    def quit_app(self):
+        """彻底退出应用（关闭窗口 / 托盘菜单「退出」都走这里）。
+
+        注意 app 设了 setQuitOnLastWindowClosed(False)，只关窗口不会结束进程，
+        必须显式 quit；且退出前要先隐藏托盘图标，否则 Windows 上图标会残留。
+        """
+        self.tray.hide_icon()
+        QApplication.instance().quit()
 
     def _shutdown(self):
         self.hotkeys.stop()
