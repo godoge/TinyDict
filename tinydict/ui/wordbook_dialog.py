@@ -15,24 +15,7 @@ from PySide6.QtWidgets import (
 from ..core.wordbook import (
     ALL_GROUPS, DEFAULT_GROUP_ID, UNGROUPED, WordBook,
 )
-
-WB_QSS = """
-QListWidget#wb_group_list{
-    border:1px solid #e5e7eb;border-radius:6px;background:#fff;font-size:14px;
-    outline:0;
-}
-QListWidget#wb_group_list::item{padding:7px 10px;}
-QListWidget#wb_group_list::item:selected{background:#dbeafe;color:#111827;}
-QListWidget#wb_word_list{
-    border:1px solid #e5e7eb;border-radius:6px;background:#fff;font-size:14px;
-    outline:0;
-}
-QListWidget#wb_word_list::item{padding:5px 10px;}
-QListWidget#wb_word_list::item:selected{background:#dbeafe;color:#111827;}
-QLabel#wb_count{color:#6b7280;font-size:12px;padding:0 2px 2px 2px;}
-QLabel#wb_title{color:#374151;font-size:12px;font-weight:600;}
-QPushButton{padding:4px 10px;font-size:13px;}
-"""
+from . import theme as _theme
 
 
 class WordbookDialog(QDialog):
@@ -40,18 +23,36 @@ class WordbookDialog(QDialog):
     groupsChanged = Signal()      # 分组增删改序，主窗口据此刷新顶栏下拉框
     wordsChanged = Signal()       # 生词增删，主窗口据此刷新 ★ 状态
 
-    def __init__(self, wordbook: WordBook, parent=None):
+    def __init__(self, wordbook: WordBook, config=None,
+                 theme_manager=None, parent=None):
         super().__init__(parent)
         self._wordbook = wordbook
+        self._config = config
+        self._theme_manager = theme_manager
         self._current_group = ALL_GROUPS
         self._note = ""           # 操作反馈（显示在计数行末尾，切换分组时清空）
 
         self.setWindowTitle("生词本")
         self.resize(780, 540)
-        self.setStyleSheet(WB_QSS)
+        self._apply_qss()
 
         self._build_ui()
         self.refresh()
+
+        # 主题变化时自动刷新（生词本窗口可能在主题切换时已经打开）
+        if self._theme_manager is not None:
+            self._theme_manager.theme_changed.connect(self._apply_qss)
+
+    def _apply_qss(self, mode=None):
+        """根据当前主题设置生词本对话框的 QSS。"""
+        if mode is None:
+            if self._theme_manager is not None:
+                mode = self._theme_manager.mode
+            elif self._config is not None:
+                mode = _theme.resolve_theme(str(self._config["theme"]))
+            else:
+                mode = "light"
+        self.setStyleSheet(_theme.wb_qss(mode))
 
     # ------------------------------------------------------------------ 界面
     def _build_ui(self):

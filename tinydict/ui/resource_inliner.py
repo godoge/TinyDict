@@ -479,6 +479,15 @@ def _inject_storage_bridge(html: str, dict_id: int, config: dict) -> str:
     return script + html
 
 
+# ---------------------------------------------------------------- color-scheme
+# 这里曾经在 HTML 层改写词库 <style> 里的 @media (prefers-color-scheme: ...)。
+# 已移除：改写词库 CSS 文本既容易破坏其原有规则，也只能处理"恰好写成媒体
+# 查询"的那部分样式，对内联 style、JS 动态加类的词库无效，灰度不一致。
+# 现在统一由 ui/main_window.py 的通用方案处理——先让词库自带主题系统切换，
+# 再实测页面整体明暗，不一致时套用通用反色滤镜。它对任何词库都一视同仁，
+# 且不需要理解词库 CSS 的内容。
+
+
 def inline_resources(html: str, dict_id: int,
                      service: DictionaryService,
                      dict_config: dict = None) -> str:

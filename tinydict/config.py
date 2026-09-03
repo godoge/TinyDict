@@ -18,6 +18,11 @@ class Config:
     #                         默认关闭，因为部分词库（如 OALDPEX）可能需要在线发音/图片。
     # - wordbook_group_id    : 顶栏选中的生词本分组 id（★ 收录的归属分组），
     #                         重启后保持上次选择；分组被删除时自动回退到默认分组 1。
+    # - theme                : 主题模式。"system" 跟随系统；"light" 浅色；"dark" 深色。
+    # - entry_theme          : 词条页配色。"follow" 跟随应用主题（通用方案，
+    #                          对所有词库一视同仁，不针对任何具体词库）；
+    #                          "native" 保持词库原样，完全不干预；
+    #                          "light" / "dark" 固定为浅色 / 深色。
     DEFAULTS = {
         "hotkey_show_hide": "ctrl+alt+d",
         "hotkey_capture": "ctrl+alt+q",
@@ -26,6 +31,8 @@ class Config:
         "fill_input_on_select": False,
         "offline_mode": False,
         "wordbook_group_id": 1,
+        "theme": "system",
+        "entry_theme": "follow",
     }
 
     def __init__(self, path: Path):

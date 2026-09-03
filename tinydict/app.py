@@ -10,6 +10,7 @@ from .core.wordbook import WordBook
 from .paths import cache_dir, config_path, db_path
 from .system.capture import SelectionCapture
 from .system.hotkeys import HotkeyService
+from .ui.theme import ThemeManager
 from .ui.icons import app_icon
 from .ui.main_window import MainWindow
 
@@ -80,8 +81,13 @@ class TinyDictApp:
         self.service = DictionaryService(self.db, cache_dir())
         self.wordbook = WordBook(self.db)
 
+        # 主题管理器：根据 Config 初始化主题并应用到整个 QApplication
+        self.theme_manager = ThemeManager(self.config, qapp)
+        self.theme_manager.apply_to_qt()
+
         # 界面层
-        self.window = MainWindow(self.service, self.config, self.wordbook)
+        self.window = MainWindow(self.service, self.config, self.wordbook,
+                                 theme_manager=self.theme_manager)
         self.tray = TrayController(self)
         self.window.set_tray(self.tray)
 
@@ -104,8 +110,14 @@ class TinyDictApp:
         self.capture.captured.connect(self.window.bring_up_and_lookup)
         self.capture.failed.connect(
             lambda: self.window.notify("划词取词：未获取到选中文本"))
-        self.window.settings_saved.connect(self.hotkeys.rebind)
+        self.window.settings_saved.connect(self._on_settings_saved)
         self.qapp.aboutToQuit.connect(self._shutdown)
+
+    def _on_settings_saved(self):
+        """设置保存后回调：重绑快捷键 + 重新应用主题。"""
+        self.hotkeys.rebind()
+        # 主题配置可能已变，重新解析并应用
+        self.theme_manager.reapply()
 
     # ------------------------------------------------------------------
     def toggle_window(self):

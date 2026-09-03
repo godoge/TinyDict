@@ -15,14 +15,8 @@ from PySide6.QtWidgets import (
 
 from ..core.mdx_access import scan_mdx_files
 from ..core.query import DictionaryService
+from . import theme as _theme
 
-
-_STATUS_LABELS = {
-    "ready": ("就绪", "#059669"),
-    "loading": ("加载中", "#b45309"),
-    "missing": ("文件缺失", "#dc2626"),
-    "disabled": ("已禁用", "#6b7280"),
-}
 
 _STATUS_TOOLTIP = {
     "ready": "已加载完成，可正常查询",
@@ -35,9 +29,15 @@ _STATUS_TOOLTIP = {
 class DictManagerDialog(QDialog):
     dicts_changed = Signal()
 
-    def __init__(self, service: DictionaryService, parent=None):
+    # 表格列索引（状态列的颜色需要按主题重刷，故单独记一个常量）
+    _STATUS_COL = 3
+
+    def __init__(self, service: DictionaryService, config=None,
+                 theme_manager=None, parent=None):
         super().__init__(parent)
         self._service = service
+        self._config = config
+        self._theme_manager = theme_manager
 
         self.setWindowTitle("词库管理")
         self.resize(680, 440)
@@ -45,21 +45,17 @@ class DictManagerDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
 
-        tip = QLabel(
+        self._tip = QLabel(
             "列表顺序即查询优先级（排在前面的词库优先展示结果）。"
             "注册即时生效：词条保留在原始 .mdx 文件中，按需读取，"
             "无需等待导入；删除仅取消注册，不影响原文件。"
         )
-        tip.setWordWrap(True)
-        tip.setStyleSheet("color:#6b7280;font-size:12px;")
-        layout.addWidget(tip)
+        self._tip.setWordWrap(True)
+        layout.addWidget(self._tip)
 
         # 缺失文件告警条：有词库文件找不到时显示，引导用户用「修复路径」
         self._warn_label = QLabel("")
         self._warn_label.setWordWrap(True)
-        self._warn_label.setStyleSheet(
-            "color:#dc2626;font-size:12px;background:#fef2f2;"
-            "border:1px solid #fecaca;border-radius:6px;padding:6px 8px;")
         self._warn_label.hide()
         layout.addWidget(self._warn_label)
 
@@ -122,10 +118,45 @@ class DictManagerDialog(QDialog):
         # 双击「文件缺失」的行 = 直接修复路径
         self._table.cellDoubleClicked.connect(self._on_cell_double_clicked)
 
+        # 主题切换时（含对话框已打开的情况）立即重刷配色
+        if self._theme_manager is not None:
+            self._theme_manager.theme_changed.connect(self._apply_theme_colors)
+
         self.refresh()
+
+    def _current_mode(self) -> str:
+        """返回当前生效的主题模式。"""
+        if self._theme_manager is not None:
+            return self._theme_manager.mode
+        if self._config is not None:
+            return _theme.resolve_theme(str(self._config["theme"]))
+        return "light"
+
+    def _apply_theme_colors(self, mode=None):
+        """按当前主题刷新本对话框里所有手动指定颜色的控件。
+
+        提示文字 / 告警条在 __init__ 里就定好了颜色，而本对话框是被主窗口
+        缓存复用的（self._dict_dialog），不刷新的话切换主题后仍是旧配色。
+        """
+        if mode is None:
+            mode = self._current_mode()
+        self._tip.setStyleSheet(
+            f"color:{_theme.tip_color(mode)};font-size:12px;")
+        self._warn_label.setStyleSheet(_theme.warn_style(mode))
+        # 表格里的状态列颜色：已渲染的行要就地改，否则要等下次 refresh
+        labels = _theme.status_labels(mode)
+        for row in range(self._table.rowCount()):
+            item = self._table.item(row, self._STATUS_COL)
+            if item is None:
+                continue
+            key = item.data(Qt.ItemDataRole.UserRole + 1)
+            _, color = labels.get(key, (None, "#6b7280"))
+            item.setForeground(QColor(color))
 
     # ------------------------------------------------------------------ 列表
     def refresh(self):
+        # 缓存复用：每次打开都按最新主题重刷一次配色
+        self._apply_theme_colors()
         self._table.blockSignals(True)
         self._table.setRowCount(0)
         missing_rows = []
@@ -149,9 +180,12 @@ class DictManagerDialog(QDialog):
                 Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
             status_key = self._service.mount_status(d.id)
-            label, color = _STATUS_LABELS.get(status_key, (status_key, "#6b7280"))
+            labels = _theme.status_labels(self._current_mode())
+            label, color = labels.get(status_key, (status_key, "#6b7280"))
             status = QTableWidgetItem(label)
             status.setForeground(QColor(color))
+            # 存一份状态键，主题切换时据此重算这一格的颜色
+            status.setData(Qt.ItemDataRole.UserRole + 1, status_key)
             # 缺失：把原因（含失效的原路径）写进 tooltip，让用户一键看懂
             if status_key == "missing":
                 err = self._service.mount_error(d.id)

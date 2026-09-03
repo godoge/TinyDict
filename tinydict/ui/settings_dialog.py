@@ -1,13 +1,21 @@
-"""设置对话框：全局快捷键 / 划词开关 / 关闭行为。"""
+"""设置对话框：全局快捷键 / 划词开关 / 关闭行为 / 主题模式。"""
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import (
-    QCheckBox, QDialog, QDialogButtonBox, QFormLayout, QLabel,
-    QKeySequenceEdit, QVBoxLayout,
+    QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout,
+    QLabel, QKeySequenceEdit, QVBoxLayout,
 )
 
 from ..config import Config
+from . import theme as _theme
+
+# 主题下拉框的可选值
+_THEME_OPTIONS = [
+    ("跟随系统", "system"),
+    ("浅色", "light"),
+    ("深色", "dark"),
+]
 
 
 def key_sequence_to_keyboard_format(seq_text: str) -> str:
@@ -72,11 +80,52 @@ class SettingsDialog(QDialog):
             "仅可使用词库自带的离线资源。\n不勾选（默认）：允许词库按需在线获取资源。")
         layout.addWidget(self._chk_offline)
 
+        # ---- 主题选择
+        theme_row = QHBoxLayout()
+        theme_row.setContentsMargins(0, 6, 0, 2)
+        theme_row.addWidget(QLabel("外观主题："))
+        self._cmb_theme = QComboBox()
+        current_theme = str(self._config["theme"])
+        for label, value in _THEME_OPTIONS:
+            self._cmb_theme.addItem(label, value)
+            if value == current_theme:
+                self._cmb_theme.setCurrentIndex(self._cmb_theme.count() - 1)
+        self._cmb_theme.setToolTip(
+            "选择「跟随系统」后，会根据 Windows 的深色/浅色设置自动切换。\n"
+            "切换主题会立即生效，无需重启。")
+        theme_row.addWidget(self._cmb_theme)
+        theme_row.addStretch(1)
+        layout.addLayout(theme_row)
+
+        # ---- 词条页配色
+        entry_row = QHBoxLayout()
+        entry_row.setContentsMargins(0, 0, 0, 2)
+        entry_row.addWidget(QLabel("词条页配色："))
+        self._cmb_entry_theme = QComboBox()
+        current_entry = str(self._config["entry_theme"])
+        for label, value in _theme.ENTRY_THEME_OPTIONS:
+            self._cmb_entry_theme.addItem(label, value)
+            if value == current_entry:
+                self._cmb_entry_theme.setCurrentIndex(
+                    self._cmb_entry_theme.count() - 1)
+        self._cmb_entry_theme.setToolTip(
+            "只对「词条正文」生效，应用窗口本身始终跟随上面的外观主题。\n"
+            "跟随应用主题：对所有词库使用同一套通用方案，不针对任何具体词库。\n"
+            "保持词库原样：完全不干预词条页，词库设计是什么样就显示什么样。\n"
+            "若觉得通用方案的处理效果不理想，选「保持词库原样」即可。")
+        entry_row.addWidget(self._cmb_entry_theme)
+        entry_row.addStretch(1)
+        layout.addLayout(entry_row)
+
         tip = QLabel(
             "提示：快捷键请避免与其他软件冲突；划词取词通过模拟 Ctrl+C 读取"
             "选中文字，随后自动恢复剪贴板内容。")
         tip.setWordWrap(True)
-        tip.setStyleSheet("color:#6b7280;font-size:12px;")
+        # 按当前实际主题取色（跟随系统时需先解析），深色下不能用浅色的灰
+        tip.setStyleSheet(
+            "color:"
+            f"{_theme.tip_color(_theme.resolve_theme(str(self._config['theme'])))}"
+            ";font-size:12px;")
         layout.addWidget(tip)
 
         buttons = QDialogButtonBox(
@@ -115,4 +164,6 @@ class SettingsDialog(QDialog):
         self._config["minimize_to_tray"] = self._chk_tray.isChecked()
         self._config["fill_input_on_select"] = self._chk_sync_input.isChecked()
         self._config["offline_mode"] = self._chk_offline.isChecked()
+        self._config["theme"] = self._cmb_theme.currentData()
+        self._config["entry_theme"] = self._cmb_entry_theme.currentData()
         super().accept()
