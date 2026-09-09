@@ -25,15 +25,14 @@ if errorlevel 1 (
 )
 
 echo [3/4] 校验打包产物不含用户数据...
-python -c "import os,sys; p='dist/TinyDict'; items=set(os.listdir(p)); allowed={'TinyDict.exe','_internal'}; extra=items-allowed; sys.exit('[ERROR] 发现非预期文件: '+', '.join(sorted(extra))+' —— 已中止，请检查！') if extra else print('[OK] dist/TinyDict 仅含: '+', '.join(sorted(items))))"
+python build_dist.py check %VERSION%
 if errorlevel 1 exit /b 1
 
 echo [4/4] 压缩为发布包...
-python -c "import shutil,os; v=os.environ['VERSION']; z='TinyDict-v'+v+'-win64.zip'; shutil.rmtree(z,ignore_errors=True) if os.path.exists(z) else None; shutil.make_archive(z[:-4],'zip','dist/TinyDict'); print('[OK] 已生成 '+z)"
+python build_dist.py zip %VERSION%
 if errorlevel 1 exit /b 1
 
 echo.
 echo 完成！发布包：TinyDict-v%VERSION%-win64.zip
 echo 之后把它上传到 GitHub Releases 即可。
 endlocal
-
