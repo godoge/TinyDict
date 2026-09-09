@@ -37,3 +37,9 @@ config.json
 # 不进 git 仓库；GitHub 单文件上限 100MB，211MB 的 zip 会被拒）
 TinyDict-*.zip
 
+# 主题诊断工具（仅本地排错用，运行 debug_theme.bat 时生成，含运行信息）
+tinydict_theme_debug.log
+debug_theme.bat
+# Windows 保留名残留文件（无法删除，仅作噪音隔离）
+nul
+

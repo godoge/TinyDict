@@ -7,7 +7,7 @@ import re as _re
 import sys
 from pathlib import Path
 
-from PySide6.QtGui import QClipboard, QColor, QGuiApplication
+from PySide6.QtGui import QClipboard, QColor, QDesktopServices, QGuiApplication
 from PySide6.QtCore import Qt, QTimer, QUrl, Signal
 from PySide6.QtWidgets import (
     QComboBox, QFrame, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
     QStatusBar, QTabBar, QToolButton, QVBoxLayout, QWidget,
 )
 from PySide6.QtWebEngineCore import (
-    QWebEnginePage, QWebEngineProfile, QWebEngineScript, QWebEngineSettings,
+    QWebEnginePage, QWebEngineProfile, QWebEngineSettings,
     QWebEngineUrlRequestInterceptor,
 )
 from PySide6.QtWebEngineWidgets import QWebEngineView
@@ -27,6 +27,7 @@ from ..core import dict_config
 from .. import __version__
 from ..config import Config
 from . import theme as _theme
+from .about_dialog import AboutDialog, RELEASES_URL, REPO_URL
 from .dict_manager_dialog import DictManagerDialog
 from .resource_inliner import inline_resources
 from .scheme_handler import MdxSchemeHandler
@@ -36,6 +37,66 @@ from .wordbook_dialog import WordbookDialog
 
 def _esc(s: str) -> str:
     return _html.escape(s or "")
+
+
+def _copy_text(text: str):
+    """把字符串放进系统剪贴板。"""
+    QGuiApplication.clipboard().setText(text)
+
+
+def _open_url(url: str):
+    """用系统默认浏览器打开 URL。"""
+    QDesktopServices.openUrl(QUrl(url))
+
+
+# ----------------------------------------------------------------------
+# 主题诊断日志（默认关闭）：设置环境变量 TINYDICT_DEBUG_THEME=1 开启。
+# 词条页每次校正配色时，把页面明暗状态追加写入日志文件，用于排查
+# 「某些词库首次正确、切换词条后主题反了」这类只在真实环境出现的时序
+# 问题。日志路径可用 TINYDICT_DEBUG_THEME_LOG 覆盖，默认写在当前目录。
+# ----------------------------------------------------------------------
+
+_THEME_DEBUG = os.environ.get("TINYDICT_DEBUG_THEME", "").strip() not in (
+    "", "0", "false")
+_THEME_DEBUG_LOG = Path(
+    os.environ.get("TINYDICT_DEBUG_THEME_LOG")
+    or Path.cwd() / "tinydict_theme_debug.log")
+
+
+def _theme_debug_log(line: str):
+    """追加一行主题诊断日志；写失败静默忽略（诊断不能影响主功能）。"""
+    try:
+        with open(_THEME_DEBUG_LOG, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except OSError:
+        pass
+
+
+# 主题诊断探针：词条渲染后由 Python 侧定时执行，取页面明暗全貌。
+# 关注四组信号：html 上的滤镜类、body/卡片的背景与文字色、词库主题类
+# （通用地取 .dict-section-all 这类内容容器，仅作观测样本，不参与决策）、
+# 词库主题环境（dark_mode 变量 / applyTheme / matchMedia 结果）。
+_THEME_PROBE_JS = (
+    "JSON.stringify({"
+    "dt:(window.__sdT0?Date.now()-window.__sdT0:-1),"
+    "href:location.href.slice(0,60),"
+    "tgt:String(window.__sdEntryTarget),"
+    "inv:document.documentElement.classList.contains('sd-invert'),"
+    "htmlCls:document.documentElement.className.slice(0,80),"
+    "bodyBg:getComputedStyle(document.body).backgroundColor,"
+    "bodyColor:getComputedStyle(document.body).color,"
+    "tldDark:document.body?document.body.classList.contains('tld-dark'):null,"
+    "card:(function(){var e=document.querySelector('.dict-section-all');"
+    "return e?{bg:getComputedStyle(e).backgroundColor,"
+    "color:getComputedStyle(e).color,"
+    "tld:e.classList.contains('tld-dark')}:null;})(),"
+    "darkMode:('dark_mode' in window)?String(window.dark_mode):'x',"
+    "applyFn:typeof window.applyTheme,"
+    "applyCur:typeof window.applyCurrentDarkTheme,"
+    "mq:(window.matchMedia?String("
+    "window.matchMedia('(prefers-color-scheme: dark)').matches):null)"
+    "})"
+)
 
 
 def _esc_js(s: str) -> str:
@@ -68,6 +129,144 @@ def _theme_seed(theme_mode: str, entry_target: str = "native") -> str:
     target = _esc_js(entry_target)
     return (f"<script>window.__sdThemeMode={mode};"
             f"window.__sdEntryTarget={target};</script>")
+
+
+def matchmedia_shim_js() -> str:
+    """matchMedia 垫片：让词库脚本探测到的配色方案跟随本应用主题。
+
+    Qt WebEngine 的 prefers-color-scheme 只认操作系统深浅色（meta
+    color-scheme / QStyleHints.setColorScheme 均覆盖不了），而多数现代词库
+    是用 matchMedia('(prefers-color-scheme: dark)') 决定是否套深色皮肤的。
+    这里在 <head> 最早处重写 window.matchMedia：对包含 prefers-color-scheme
+    的查询按 window.__sdThemeMode 求值，其它查询原样交给原生实现。
+    不针对具体词库，对所有词库通用。
+    """
+    return (
+        "(function(){"
+        "if(!window.matchMedia)return;"
+        "var orig=window.matchMedia.bind(window);"
+        "function fake(q,matches){return{matches:matches,media:q,onchange:null,"
+        "addListener:function(){},removeListener:function(){},"
+        "addEventListener:function(){},removeEventListener:function(){},"
+        "dispatchEvent:function(){return false;}};}"
+        "window.matchMedia=function(q){"
+        "var s=String(q||'');"
+        "var m=s.match(/prefers-color-scheme\\s*:\\s*(dark|light)/i);"
+        "if(!m)return orig(s);"
+        "var want=m[1].toLowerCase();"
+        "var mode=window.__sdThemeMode||'light';"
+        "if(want!==mode)return fake(s,false);"
+        # 与主题一致：仅含 prefers-color-scheme 一个条件时恒真，
+        # 还与其它条件组合（如 max-width）时交原生求值
+        "var rest=s.replace(/prefers-color-scheme\\s*:\\s*(dark|light)/i,'');"
+        "if(/[\\w-]\\s*:/.test(rest))return orig(s);"
+        "return fake(s,true);"
+        "};"
+        "})();"
+    )
+
+
+def entry_theme_js() -> str:
+    """生成「通用」词条页配色脚本——对所有词库执行完全相同的逻辑。
+
+    设计原则：不出现任何词库名，不注入高特异性 !important 覆盖（那会
+    压平词库自带的配色/背景/排版，表现为词条页「变样」）。流程只有三步：
+
+    1) 目标为 native → 直接收工，词条页保持词库原样，一个字节都不改；
+    2) 若词库自己暴露了 window.applyTheme，就用它的原生实现切到目标
+       明暗（这是保真度最高的路径，外观完全是词库自己的设计）；
+    3) 实测页面整体明暗，若与目标不一致，才给 <html> 加上 sd-invert
+       类启用通用反色滤镜——明暗对调但保留配色关系与排版。这一步对
+       所有词库一视同仁，是静态词库（无主题系统）的兜底。
+
+    目标不写死进脚本源码：真正的目标来自每次渲染都重新携带的 HTML 种子
+    window.__sdEntryTarget，切换主题后新文档会自动按新目标执行。
+
+    本脚本随 HTML 内联，而不是用 QWebEngineScript 注入：实测注入脚本在
+    反复 setHtml 的页面上存在"新文档拿不到脚本"的竞态（表现为同一词条
+    第一次配色正确、切回来就变浅），内联脚本随文档解析执行，必然生效。
+    """
+    return (
+        "(function(){"
+        "window.__sdT0=Date.now();"
+        # 解析一个 CSS 颜色的明暗；透明（alpha<0.5）返回 null 表示"看不出来"
+        "function sdIsDark(c){"
+        "var m=/rgba?\\(([^)]+)\\)/i.exec(String(c||''));"
+        "if(!m)return null;"
+        "var p=m[1].split(',');"
+        "var a=p.length>3?(parseFloat(p[3])||0):1;"
+        "if(a<0.5)return null;"
+        "var r=parseFloat(p[0])||0,g=parseFloat(p[1])||0,b=parseFloat(p[2])||0;"
+        "return (0.299*r+0.587*g+0.114*b)<128;"
+        "}"
+        "function sdPageIsDark(){"
+        "try{"
+        "var d=sdIsDark(getComputedStyle("
+        "document.body||document.documentElement).backgroundColor);"
+        "if(d!==null)return d;"
+        "d=sdIsDark(getComputedStyle(document.documentElement).backgroundColor);"
+        "if(d!==null)return d;"
+        "}catch(e){}"
+        # 整页背景都透明 → 按浅色处理：此时画布色由 Qt 提供（已是目标明暗），
+        # 正文通常是黑色，翻转后正好变成白字压在深色画布上。
+        "return false;"
+        "}"
+        "var last=null;var applied=false;"
+        "function sdApplyEntryTheme(force){"
+        "var r=document.documentElement;"
+        "if(!r)return;"
+        "var t=window.__sdEntryTarget||'native';"
+        "if(t==='native'){"
+        "if(last!=='native'){last='native';r.classList.remove('sd-invert');}"
+        "return;}"
+        # 词库自带主题函数：每个文档只调用一次（force 除外）。
+        # 老实现每次复查都调用，遇到 toggle 型实现会被反复翻转，
+        # 最终明暗取决于调用次数的奇偶——这正是「切回某个词条后主题
+        # 反过来」的一类成因。
+        "if((!applied||force)&&typeof window.applyTheme==='function'){"
+        "applied=true;"
+        "try{window.applyTheme(t);}catch(e){}"
+        "}"
+        "var want=(t==='dark');"
+        "var need=(sdPageIsDark()!==want);"
+        # 结论没变就一个字节都不动：既避免与词库自身的 MutationObserver
+        # 互相触发，也保证本函数幂等（重复执行结果完全一致）。
+        "if(need===last)return;"
+        "last=need;"
+        "if(need){r.classList.add('sd-invert');}"
+        "else{r.classList.remove('sd-invert');}"
+        "}"
+        "window.__sdApplyEntryTheme=function(force){"
+        "last=null;sdApplyEntryTheme(!!force);};"
+        "function sdSchedule(){"
+        "sdApplyEntryTheme();"
+        # 词库脚本与样式表常常是异步就绪的（外链 CSS/JS、延迟注入的
+        # 主题类），而词条容器要到 1200ms 才揭幕；复查点必须覆盖到
+        # 揭幕之后，否则用户看到的是过期结论。
+        "[0,80,300,800,1500,3000].forEach(function(ms){"
+        "setTimeout(function(){sdApplyEntryTheme();},ms);});"
+        # 所有资源加载完毕后再校正一次：此时词库自己的脚本一定已执行
+        "window.addEventListener('load',function(){"
+        "sdApplyEntryTheme();"
+        "setTimeout(function(){sdApplyEntryTheme();},200);"
+        "setTimeout(function(){sdApplyEntryTheme();},800);});"
+        # 长期观察：无论词库在什么时候改动 DOM/class（延迟注入暗色样式、
+        # 点开折叠区后重排等），都重新校正一次。debounce 合并，且结论
+        # 不变时不碰 DOM，因此不会自激震荡。
+        "if(typeof MutationObserver!=='undefined'){"
+        "var pending=false;"
+        "var mo=new MutationObserver(function(){"
+        "if(pending)return;pending=true;"
+        "setTimeout(function(){pending=false;sdApplyEntryTheme();},80);});"
+        "try{mo.observe(document.documentElement,{childList:true,"
+        "subtree:true,attributes:true,"
+        "attributeFilter:['class','style']});}catch(e){}"
+        "}"
+        "}"
+        "if(document.readyState!=='loading'){sdSchedule();}"
+        "else{document.addEventListener('DOMContentLoaded',sdSchedule);}"
+        "})();"
+    )
 
 
 def _page(inner: str, theme_mode: str = "light") -> str:
@@ -182,21 +381,30 @@ def entry_page(raw_html: str, word: str, theme_mode: str = "light",
         # 才会给 <html> 加上 sd-invert 类启用它。
         filter_css = (
             f'<style id="sd-entry-filter">{_theme.entry_filter_css()}</style>')
+        # 垫片必须早于词库自己的脚本：很多词库在加载时就用 matchMedia
+        # 决定明暗，晚一步它们就按系统（而非本应用）的配色套皮肤了。
+        shim = f"<script>{matchmedia_shim_js()}</script>"
         if "<head" in lower:
             # 用函数做替换，避免反向引用 \1 在 f-string 里被误解析
             s = _re.sub(
                 r"(<head[^>]*>)",
                 lambda m: (m.group(1) + '<meta charset="utf-8">'
+                           + shim
                            + _theme_seed(theme_mode, entry_target)
                            + filter_css),
                 s, count=1, flags=_re.I,
             )
         else:
             s = ("<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
+                 + shim
                  + _theme_seed(theme_mode, entry_target)
                  + filter_css + "</head>"
                  f"<body>{s}</body></html>")
-        return _wrap_with_guard(s)
+        # 配色脚本内联在文档尾部：随解析执行，不依赖注入脚本的时序
+        s = _wrap_with_guard(s)
+        tail = f"<script>{entry_theme_js()}</script>"
+        end = s.lower().rfind("</body>")
+        return s[:end] + tail + s[end:] if end > 0 else s + tail
     return _page(
         f'<div class="sd-headword">{_esc(word)}</div>'
         f'<div class="sd-plain">{_esc(s)}</div>',
@@ -307,140 +515,9 @@ class DictPage(QWebEnginePage):
 
     entryLink = Signal(str)
 
-    # 注入脚本在 scripts() 集合里的名字（整页只安装一次）
-    _THEME_SCRIPT_NAME = "tinydict-globals"
-    _SCHEME_SHIM_NAME = "tinydict-scheme-shim"
-
     def __init__(self, *args, theme_mode: str = "light", **kwargs):
         super().__init__(*args, **kwargs)
         self._theme_mode = theme_mode
-        self._install_theme_scripts()
-
-    def _build_scheme_shim(self) -> QWebEngineScript:
-        """matchMedia 垫片：让词库脚本探测到的配色方案跟随本应用主题。
-
-        Qt WebEngine 的 prefers-color-scheme 只认操作系统深浅色（实测
-        6.11：meta color-scheme / QStyleHints.setColorScheme 均覆盖不了），
-        系统深色时词库脚本用 matchMedia 探测到 dark 便会自行套用深色皮肤。
-        这里在文档创建时机（早于词库所有脚本）重写 window.matchMedia：
-        对包含 prefers-color-scheme 的查询按 window.__sdThemeMode 求值，
-        其它查询原样交给原生实现。不针对具体词库，对所有词库通用。
-        """
-        shim = (
-            "(function(){"
-            "if(!window.matchMedia)return;"
-            "var orig=window.matchMedia.bind(window);"
-            "function fake(q,matches){return{matches:matches,media:q,onchange:null,"
-            "addListener:function(){},removeListener:function(){},"
-            "addEventListener:function(){},removeEventListener:function(){},"
-            "dispatchEvent:function(){return false;}};}"
-            "window.matchMedia=function(q){"
-            "var s=String(q||'');"
-            "var m=s.match(/prefers-color-scheme\\s*:\\s*(dark|light)/i);"
-            "if(!m)return orig(s);"
-            "var want=m[1].toLowerCase();"
-            "var mode=window.__sdThemeMode||'light';"
-            "if(want!==mode)return fake(s,false);"
-            # 与主题一致：仅含 prefers-color-scheme 一个条件时恒真，
-            # 还与其它条件组合（如 max-width）时交原生求值
-            "var rest=s.replace(/prefers-color-scheme\\s*:\\s*(dark|light)/i,'');"
-            "if(/[\\w-]\\s*:/.test(rest))return orig(s);"
-            "return fake(s,true);"
-            "};"
-            "})();"
-        )
-        script = QWebEngineScript()
-        script.setName(self._SCHEME_SHIM_NAME)
-        script.setInjectionPoint(QWebEngineScript.InjectionPoint.DocumentCreation)
-        script.setWorldId(QWebEngineScript.ScriptWorldId.MainWorld)
-        script.setRunsOnSubFrames(False)
-        script.setSourceCode(shim)
-        return script
-
-    def _build_theme_script(self) -> QWebEngineScript:
-        """生成「通用」词条页配色脚本——对所有词库执行完全相同的逻辑。
-
-        设计原则：不出现任何词库名，不注入高特异性 !important 覆盖（那会
-        压平词库自带的配色/背景/排版，表现为词条页「变样」）。流程只有三步：
-
-        1) 目标为 native → 直接收工，词条页保持词库原样，一个字节都不改；
-        2) 若词库自己暴露了 window.applyTheme，就用它的原生实现切到目标
-           明暗（这是保真度最高的路径，外观完全是词库自己的设计）；
-        3) 实测页面整体明暗，若与目标不一致，才给 <html> 加上 sd-invert
-           类启用通用反色滤镜——明暗对调但保留配色关系与排版。这一步对
-           所有词库一视同仁，是静态词库（无主题系统）的兜底。
-
-        目标不写死进脚本源码：脚本只在构造时安装一次；真正的目标来自
-        HTML 种子 window.__sdEntryTarget（每次渲染都重新携带），切换主题后
-        新文档会自动按新目标执行，避免「窗口变浅、词条页却还是深色」。
-
-        注入时机 DocumentCreation：本脚本注册的 DOMContentLoaded 回调会排在
-        词条尾部脚本之前执行，因此滤镜在页面揭幕（opacity 0→1）前就已就位，
-        不会闪一下原色再翻转。
-        """
-        js_impl = (
-            "(function(){"
-            # 解析一个 CSS 颜色的明暗；透明（alpha<0.5）返回 null 表示"看不出来"
-            "function sdIsDark(c){"
-            "var m=/rgba?\\(([^)]+)\\)/i.exec(String(c||''));"
-            "if(!m)return null;"
-            "var p=m[1].split(',');"
-            "var a=p.length>3?(parseFloat(p[3])||0):1;"
-            "if(a<0.5)return null;"
-            "var r=parseFloat(p[0])||0,g=parseFloat(p[1])||0,b=parseFloat(p[2])||0;"
-            "return (0.299*r+0.587*g+0.114*b)<128;"
-            "}"
-            "function sdPageIsDark(){"
-            "try{"
-            "var d=sdIsDark(getComputedStyle("
-            "document.body||document.documentElement).backgroundColor);"
-            "if(d!==null)return d;"
-            "d=sdIsDark(getComputedStyle(document.documentElement).backgroundColor);"
-            "if(d!==null)return d;"
-            "}catch(e){}"
-            # 整页背景都透明 → 按浅色处理：此时画布色由 Qt 提供（已是目标明暗），
-            # 正文通常是黑色，翻转后正好变成白字压在深色画布上。
-            "return false;"
-            "}"
-            "function sdApplyEntryTheme(){"
-            "var r=document.documentElement;"
-            "if(!r)return;"
-            "var t=window.__sdEntryTarget||'native';"
-            "if(t==='native'){r.classList.remove('sd-invert');return;}"
-            "if(typeof window.applyTheme==='function'){"
-            "try{window.applyTheme(t);}catch(e){}"
-            "}"
-            "var want=(t==='dark');"
-            "if(sdPageIsDark()!==want){r.classList.add('sd-invert');}"
-            "else{r.classList.remove('sd-invert');}"
-            "}"
-            "window.__sdApplyEntryTheme=sdApplyEntryTheme;"
-            "function sdSchedule(){"
-            "sdApplyEntryTheme();"
-            # 部分词库会在文档就绪后才异步套用自己的主题，因此跨几个时间点
-            # 复查；复查只是增删同一个类，幂等无副作用。
-            "[0,80,300,800].forEach(function(ms){setTimeout(sdApplyEntryTheme,ms);});"
-            "}"
-            "if(document.readyState!=='loading'){sdSchedule();}"
-            "else{document.addEventListener('DOMContentLoaded',sdSchedule);}"
-            "})();"
-        )
-        script = QWebEngineScript()
-        script.setName(self._THEME_SCRIPT_NAME)
-        script.setInjectionPoint(QWebEngineScript.InjectionPoint.DocumentCreation)
-        script.setWorldId(QWebEngineScript.ScriptWorldId.MainWorld)
-        script.setRunsOnSubFrames(False)
-        script.setSourceCode(js_impl)
-        return script
-
-    def _install_theme_scripts(self):
-        """安装注入脚本。整页生命周期只调一次，模式由 HTML 携带。"""
-        scripts = self.scripts()
-        for name in (self._THEME_SCRIPT_NAME, self._SCHEME_SHIM_NAME):
-            for old in scripts.find(name):
-                scripts.remove(old)
-        scripts.insert(self._build_theme_script())
-        scripts.insert(self._build_scheme_shim())
 
     def set_theme_mode(self, mode: str, entry_target: str = "native"):
         """运行时切换主题模式（由 MainWindow._reapply_theme 调用）。
@@ -450,12 +527,19 @@ class DictPage(QWebEnginePage):
         触发一次，无需重新渲染。
         """
         self._theme_mode = mode
+        # 传 true：允许再调用一次词库自带的主题函数（切换主题时需要它跟着切），
+        # 并强制重算结论（last 缓存失效）。
         self.runJavaScript(
             f"try{{window.__sdThemeMode={_esc_js(mode)};"
             f"window.__sdEntryTarget={_esc_js(entry_target)};}}catch(e){{}}"
-            f"if(window.__sdApplyEntryTheme)window.__sdApplyEntryTheme();")
+            f"if(window.__sdApplyEntryTheme)window.__sdApplyEntryTheme(true);")
 
     def javaScriptConsoleMessage(self, level, message, lineNumber, sourceID):
+        # 主题诊断：保留 console.log 上报通道（前缀 SDTHEME），
+        # 诊断优先于下面的级别过滤。
+        if isinstance(message, str) and message.startswith("SDTHEME "):
+            _theme_debug_log(message[len("SDTHEME "):])
+            return
         # 仅打印 Error 级别，屏蔽词库自身的 console.log / console.info 调试噪音。
         # 旧默认实现会把所有 JS 控制台消息（含普通调试）打到 stderr，前缀 "js:"。
         if level != QWebEnginePage.JavaScriptConsoleMessageLevel.ErrorMessageLevel:
@@ -649,6 +733,19 @@ class MainWindow(QMainWindow):
             QColor(255, 255, 255) if self._current_theme_mode() == "light"
             else QColor(30, 30, 30))
 
+    def _schedule_theme_probe(self):
+        """诊断模式：渲染后在几个关键时间点取词条页明暗状态写入日志。
+
+        时间点覆盖「词库脚本/CSS 异步生效」的常见窗口（含 1200ms 揭幕
+        之后），足够看清结论是在哪个时刻、被什么改变的。
+        """
+        if self._page is None:
+            return
+        for ms in (400, 1000, 2200, 5000):
+            QTimer.singleShot(ms, lambda: self._page.runJavaScript(
+                _THEME_PROBE_JS,
+                lambda v: _theme_debug_log(str(v))))
+
     def _reapply_theme(self, new_mode: str):
         """主题变化时调用：更新 QSS、通知 DictPage、并重新渲染当前词条。"""
         self._apply_qss()
@@ -726,6 +823,20 @@ class MainWindow(QMainWindow):
             b.setToolTip(tip)
             b.clicked.connect(slot)
             top.addWidget(b)
+
+        # 「关于」下拉菜单：关于 / 复制开源地址 / 查看新版本
+        # 用菜单而不是单独对话框按钮的原因：日常用不到，揉进一个入口即可。
+        self._btn_about = QToolButton(text="关于")
+        self._btn_about.setToolTip("关于本软件 / 开源地址 / 检查更新")
+        about_menu = QMenu(self._btn_about)
+        about_menu.addAction("关于 TinyDict…", self.open_about)
+        about_menu.addSeparator()
+        about_menu.addAction("复制开源地址", lambda: self._copy_text(REPO_URL))
+        about_menu.addAction("查看新版本", lambda: self._open_url(RELEASES_URL))
+        self._btn_about.setMenu(about_menu)
+        self._btn_about.setPopupMode(
+            QToolButton.ToolButtonPopupMode.InstantPopup)
+        top.addWidget(self._btn_about)
         root.addLayout(top)
 
         # ---- 词典切换（多部词库命中时显示在词条页上方）
@@ -971,6 +1082,12 @@ class MainWindow(QMainWindow):
         self._view.setHtml(entry_page(raw, r.word, self._current_theme_mode(),
                                       self._entry_target()),
                            QUrl(f"mdx://{r.dict_id}/"))
+        if _THEME_DEBUG:
+            _theme_debug_log(
+                f"=== render word={r.word!r} dict={r.dict_id} "
+                f"target={self._entry_target()} "
+                f"mode={self._current_theme_mode()} ===")
+            self._schedule_theme_probe()
         others = len(self._results) - 1
         pending = self._pending_mount_count()
         msg = f"词典：{r.dict_name}"
@@ -1248,6 +1365,22 @@ class MainWindow(QMainWindow):
                 self._reapply_theme(self._current_theme_mode())
             if self._tray is not None:
                 self._tray.apply_config()
+
+    def open_about(self):
+        dlg = AboutDialog(dict_summary=self._dict_summary(), parent=self)
+        dlg.exec()
+
+    def _dict_summary(self) -> str:
+        """供「关于」对话框使用的词典数量摘要，失败或为空时返回空串。"""
+        try:
+            enabled = list(self._service.enabled_dicts())
+        except Exception:
+            return ""
+        if not enabled:
+            return ""
+        mounted = sum(1 for d in enabled
+                      if self._service.is_mounted(d.id))
+        return f"{len(enabled)} 部（{mounted} 部已就绪）"
 
     # ---------------------------------------------------------------- 对外接口
     def bring_up_and_lookup(self, word: str):

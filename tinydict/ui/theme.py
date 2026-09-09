@@ -163,23 +163,105 @@ def entry_filter_css() -> str:
 # Qt 控件 QSS
 # ----------------------------------------------------------------------
 
+# 滚动条必须显式定义，否则 Fusion 会用默认绘制（换肤时不跟随，
+# 表现为浅色主题下滚动条「滑块之外的轨道」仍是深色的）。
+# 这里把滑块、轨道、上/下箭头、翻页区都写死成当前主题的颜色：
+#   - 箭头上/下区域高度设为 0，隐藏原生三角箭头，只留滑块 + 轨道；
+#   - add-page / sub-page 用透明，轨道底色由 QScrollBar 自身背景提供，
+#     这样滑块之外就是一层干净的主题色，不会露出默认深色。
+_SCROLLBAR_QSS_LIGHT = """
+QScrollBar:vertical{
+    background:#f3f4f6;border:none;width:12px;margin:0;padding:0;
+}
+QScrollBar:horizontal{
+    background:#f3f4f6;border:none;height:12px;margin:0;padding:0;
+}
+QScrollBar::handle:vertical{
+    background:#cbd5e1;border-radius:5px;min-height:28px;margin:2px;
+}
+QScrollBar::handle:vertical:hover{background:#94a3b8;}
+QScrollBar::handle:vertical:pressed{background:#64748b;}
+QScrollBar::handle:horizontal{
+    background:#cbd5e1;border-radius:5px;min-width:28px;margin:2px;
+}
+QScrollBar::handle:horizontal:hover{background:#94a3b8;}
+QScrollBar::handle:horizontal:pressed{background:#64748b;}
+QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{
+    height:0px;width:0px;subcontrol-origin:margin;border:none;
+}
+QScrollBar::add-line:horizontal,QScrollBar::sub-line:horizontal{
+    width:0px;height:0px;subcontrol-origin:margin;border:none;
+}
+QScrollBar::add-page:vertical,QScrollBar::sub-page:vertical{
+    background:transparent;
+}
+QScrollBar::add-page:horizontal,QScrollBar::sub-page:horizontal{
+    background:transparent;
+}
+"""
+
+_SCROLLBAR_QSS_DARK = """
+QScrollBar:vertical{
+    background:#2d2d30;border:none;width:12px;margin:0;padding:0;
+}
+QScrollBar:horizontal{
+    background:#2d2d30;border:none;height:12px;margin:0;padding:0;
+}
+QScrollBar::handle:vertical{
+    background:#4f5462;border-radius:5px;min-height:28px;margin:2px;
+}
+QScrollBar::handle:vertical:hover{background:#6b7280;}
+QScrollBar::handle:vertical:pressed{background:#9ca3af;}
+QScrollBar::handle:horizontal{
+    background:#4f5462;border-radius:5px;min-width:28px;margin:2px;
+}
+QScrollBar::handle:horizontal:hover{background:#6b7280;}
+QScrollBar::handle:horizontal:pressed{background:#9ca3af;}
+QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{
+    height:0px;width:0px;subcontrol-origin:margin;border:none;
+}
+QScrollBar::add-line:horizontal,QScrollBar::sub-line:horizontal{
+    width:0px;height:0px;subcontrol-origin:margin;border:none;
+}
+QScrollBar::add-page:vertical,QScrollBar::sub-page:vertical{
+    background:transparent;
+}
+QScrollBar::add-page:horizontal,QScrollBar::sub-page:horizontal{
+    background:transparent;
+}
+"""
+
+
+def scrollbar_qss(mode: str) -> str:
+    """滚动条样式表（浅/深两套）。
+
+    单独提供一份，方便挂到 QApplication 上：这样主窗口、生词本、
+    词典管理等所有对话框的滚动条都能统一跟随主题，而不必在每个
+    窗口的 QSS 里各写一遍。
+    """
+    return _SCROLLBAR_QSS_DARK if mode == "dark" else _SCROLLBAR_QSS_LIGHT
+
+
 _APP_QSS_LIGHT = """
 /* 搜索框与候选词列表同属一张卡片：外层画整框，内部两控件只留一条分隔线，
    拼成一个整体控件，而不是两个各自带框的独立部件。 */
 QFrame#search_panel{
     border:1px solid #d1d5db;border-radius:8px;background:#fff;
 }
+/* 输入框与候选列表同属一张卡片，但用不同底色分成上下两段：
+   输入框像"内嵌的填写区"，列表是纯白的结果区，一眼能分清哪里能打字。 */
 QLineEdit#search_edit{
-    border:none;border-bottom:1px solid #e5e7eb;border-radius:8px 8px 0 0;
-    padding:7px 12px;font-size:15px;background:transparent;
+    border:none;border-bottom:1px solid #d1d5db;border-radius:7px 7px 0 0;
+    padding:8px 12px;font-size:15px;background:#f1f3f5;color:#111827;
     selection-background-color:#dbeafe;
 }
-QLineEdit#search_edit:focus{border-bottom-color:#2563eb;}
+QLineEdit#search_edit:focus{background:#e8edf3;border-bottom-color:#2563eb;}
 QListWidget#suggest_list{
-    border:none;border-radius:0 0 8px 8px;background:transparent;
+    border:none;border-radius:0 0 7px 7px;background:#fff;
     font-size:14px;outline:0;
 }
-QListWidget#suggest_list::item{padding:5px 10px;}
+QListWidget#suggest_list::item{padding:5px 10px;color:#374151;}
+QListWidget#suggest_list::item:hover{background:#f1f3f5;}
 QListWidget#suggest_list::item:selected{background:#dbeafe;color:#111827;}
 QTabBar::tab{padding:5px 14px;background:#f3f4f6;color:#4b5563;}
 QTabBar::tab:selected{background:#fff;color:#1d4ed8;
@@ -196,19 +278,20 @@ QComboBox#group_combo::drop-down{border:none;width:16px;}
 
 _APP_QSS_DARK = """
 QFrame#search_panel{
-    border:1px solid #374151;border-radius:8px;background:#252526;
+    border:1px solid #374151;border-radius:8px;background:#1e1e1e;
 }
 QLineEdit#search_edit{
-    border:none;border-bottom:1px solid #374151;border-radius:8px 8px 0 0;
-    padding:7px 12px;font-size:15px;background:transparent;color:#d4d4d4;
+    border:none;border-bottom:1px solid #374151;border-radius:7px 7px 0 0;
+    padding:8px 12px;font-size:15px;background:#2d2d30;color:#d4d4d4;
     selection-background-color:#3b82f6;selection-color:#fff;
 }
-QLineEdit#search_edit:focus{border-bottom-color:#60a5fa;}
+QLineEdit#search_edit:focus{background:#33333a;border-bottom-color:#60a5fa;}
 QListWidget#suggest_list{
-    border:none;border-radius:0 0 8px 8px;background:transparent;
+    border:none;border-radius:0 0 7px 7px;background:#1e1e1e;
     font-size:14px;outline:0;color:#d4d4d4;
 }
 QListWidget#suggest_list::item{padding:5px 10px;}
+QListWidget#suggest_list::item:hover{background:#2d2d30;}
 QListWidget#suggest_list::item:selected{background:#1f4e79;color:#fff;}
 QTabBar::tab{padding:5px 14px;background:#2d2d30;color:#9ca3af;}
 QTabBar::tab:selected{background:#1e1e1e;color:#93c5fd;
@@ -228,7 +311,8 @@ QToolButton:hover{background:#374151;}
 
 def app_qss(mode: str) -> str:
     """主窗口（含顶栏控件 / 联想列表 / Tab / 搜索框）的样式表。"""
-    return _APP_QSS_DARK if mode == "dark" else _APP_QSS_LIGHT
+    base = _APP_QSS_DARK if mode == "dark" else _APP_QSS_LIGHT
+    return base + scrollbar_qss(mode)
 
 
 _WB_QSS_LIGHT = """
@@ -270,7 +354,8 @@ QPushButton{padding:4px 10px;font-size:13px;}
 
 def wb_qss(mode: str) -> str:
     """生词本对话框的样式表。"""
-    return _WB_QSS_DARK if mode == "dark" else _WB_QSS_LIGHT
+    base = _WB_QSS_DARK if mode == "dark" else _WB_QSS_LIGHT
+    return base + scrollbar_qss(mode)
 
 
 # ----------------------------------------------------------------------
@@ -393,8 +478,12 @@ class ThemeManager(QObject):
                              QColor(156, 163, 175))
             self._qapp.setPalette(palette)
 
-        # 最后再叠加应用级 QSS（主窗口 setStyleSheet 会覆盖这个）
-        self._qapp.setStyleSheet("")
+        # 最后在 QApplication 级挂一份滚动条样式：这样主窗口之外的
+        # 对话框（生词本 / 词典管理 / 设置等）也能拿到正确颜色的滚动条，
+        # 而不会退回 Fusion 的默认绘制（浅色主题下轨道发黑）。
+        # 主窗口与各对话框自己的 setStyleSheet 会覆盖同名的规则，
+        # 但内容一致，不存在冲突。
+        self._qapp.setStyleSheet(scrollbar_qss(self._mode))
 
     def _apply_dark_palette(self):
         from PySide6.QtGui import QColor, QPalette
