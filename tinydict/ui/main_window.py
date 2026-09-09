@@ -824,18 +824,10 @@ class MainWindow(QMainWindow):
             b.clicked.connect(slot)
             top.addWidget(b)
 
-        # 「关于」下拉菜单：关于 / 复制开源地址 / 查看新版本
-        # 用菜单而不是单独对话框按钮的原因：日常用不到，揉进一个入口即可。
+        # 「关于」按钮：直接弹出关于对话框
         self._btn_about = QToolButton(text="关于")
-        self._btn_about.setToolTip("关于本软件 / 开源地址 / 检查更新")
-        about_menu = QMenu(self._btn_about)
-        about_menu.addAction("关于 TinyDict…", self.open_about)
-        about_menu.addSeparator()
-        about_menu.addAction("复制开源地址", lambda: self._copy_text(REPO_URL))
-        about_menu.addAction("查看新版本", lambda: self._open_url(RELEASES_URL))
-        self._btn_about.setMenu(about_menu)
-        self._btn_about.setPopupMode(
-            QToolButton.ToolButtonPopupMode.InstantPopup)
+        self._btn_about.setToolTip("关于本软件")
+        self._btn_about.clicked.connect(self.open_about)
         top.addWidget(self._btn_about)
         root.addLayout(top)
 
