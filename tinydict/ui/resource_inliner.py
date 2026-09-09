@@ -12,9 +12,18 @@ import os
 import re
 from html import escape
 from typing import Callable, Optional
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 
 _DEBUG = os.environ.get("SD_DEBUG_RESOURCES", "0") == "1"
+
+# 单个资源内联为 data URI 的体积上限（字节）。超过则改走 mdx:// 惰性加载。
+#
+# Chromium 经 setHtml(data:URL) 加载词条页时，整个 data URL 有约 2 MiB 的
+# 硬上限；把大图 / 大资源 base64 塞进 HTML 会让词条页「静默空白」——这与
+# 词库具体内容无关，纯粹是体积问题（OALDPEX 里带大图插图的词条图幅可达
+# 1.5 MiB，内联后单条 HTML 直接越过上限）。因此凡是超过本阈值的资源都不
+# 内联，改为保留一个绝对 mdx:// 地址，由 MdxSchemeHandler 按需读取。
+INLINE_SIZE_LIMIT = 256 * 1024
 
 from ..core.query import DictionaryService
 from .scheme_handler import DEFAULT_MIME, guess_mime
@@ -128,11 +137,26 @@ def _to_data_uri(data: bytes, src: str, force_mime: str = None) -> str:
     return f"data:{mime};base64," + base64.b64encode(data).decode("ascii")
 
 
+def _data_uri_or_mdx(data: bytes, path: str, dict_id: int,
+                     force_mime: str = None) -> str:
+    """小资源内联为 data URI；大资源改走 mdx:// 惰性加载。
+
+    path 为在词典里命中的归一化资源路径（用于拼绝对 mdx:// 地址）。
+    与词库无关：只要某个资源超过 INLINE_SIZE_LIMIT，就不 base64 塞进
+    HTML，避免整页 data URL 越过 Chromium 的 2 MiB 上限导致空白页。
+    """
+    if len(data) > INLINE_SIZE_LIMIT:
+        return f"mdx://{dict_id}/{quote(path)}"
+    if force_mime is not None:
+        return f"data:{force_mime};base64," + base64.b64encode(data).decode("ascii")
+    return _to_data_uri(data, path)
+
+
 # <script src> 即便文件扩展名是 .ini/.txt，其本质也是 JS（如 TLD 的 config.ini
 # 实为全局变量赋值脚本）。浏览器会按 data URI 的 MIME 校验脚本可执行性，
 # 非 JS MIME（如 application/octet-stream / text/plain）会被拒绝执行，导致
 # 依赖这些全局变量的后续脚本（如 fy.js 的 applyConfig）读到 undefined 而错乱。
-# 因此内联脚本一律强制 text/javascript。
+# 因此内联脚本一律强制 text/javascript（超大脚本同样改走 mdx://，避免撑爆词条页）。
 def _resolve_js(url: str, service: DictionaryService, dict_id: int) -> Optional[str]:
     p = _normalize(url)
     if not p:
@@ -140,7 +164,8 @@ def _resolve_js(url: str, service: DictionaryService, dict_id: int) -> Optional[
     for cand in _build_candidates(p):
         data = service.find_resource(dict_id, cand)
         if data is not None:
-            return "data:text/javascript;base64," + base64.b64encode(data).decode("ascii")
+            return _data_uri_or_mdx(data, cand, dict_id,
+                                    force_mime="text/javascript")
     return None
 
 
@@ -182,7 +207,7 @@ def _resolve_normalized(p: str, service: DictionaryService,
         if data is not None:
             if _DEBUG:
                 print(f"[SD-RES] hit {original[:60]!r} -> {cand} ({len(data)} bytes)")
-            return _to_data_uri(data, cand)
+            return _data_uri_or_mdx(data, cand, dict_id)
     _MISS_LOG.append((original, _build_candidates(p)))
     if _DEBUG:
         print(f"[SD-RES] miss {original[:60]!r} (tried {_build_candidates(p)})")
