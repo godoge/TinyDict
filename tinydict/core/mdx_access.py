@@ -52,10 +52,21 @@ def normalize_resource_path(raw: str) -> str:
     return p.strip("/").lower()
 
 
+# MDX 模板里 <Title> 字段的默认占位符（词典作者没填标题就发布的情况）。
+# 出现这些值时视为"无有效标题"，调用方回退到文件名。
+_TITLE_PLACEHOLDERS = {
+    "title (no html code allowed)",
+    "title(no html code allowed)",
+    "title",                      # 只留了标签名
+    "no html code allowed",
+    "",
+}
+
+
 def quick_mdx_title(fname: str) -> str:
     """秒级读取 MDX 头部 XML 中的 Title 属性（注册词库时用，不解析正文）。
 
-    失败时返回空字符串（调用方回退到文件名）。
+    失败 / 标题为模板占位符时返回空字符串（调用方回退到文件名）。
     """
     try:
         with open(fname, "rb") as f:
@@ -72,6 +83,10 @@ def quick_mdx_title(fname: str) -> str:
             for ent, ch in (("&lt;", "<"), ("&gt;", ">"),
                             ("&quot;", '"'), ("&amp;", "&")):
                 title = title.replace(ent, ch)
+            title = title.strip()
+            # 过滤模板占位符 / 纯空白
+            if title.casefold() in _TITLE_PLACEHOLDERS:
+                return ""
             return title
     except OSError:
         pass

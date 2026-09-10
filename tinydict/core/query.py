@@ -18,6 +18,7 @@ from PySide6.QtCore import QObject, QThread, Signal
 from .database import Database, DictInfo
 from .mdx_access import (
     LazyMDX, LazyMDD, find_mdd_files, quick_mdx_title, scan_mdx_files,
+    _TITLE_PLACEHOLDERS,
 )
 
 
@@ -182,6 +183,9 @@ class DictionaryService(QObject):
         if self._loader is not None and self._loader.isRunning():
             self._pending_reload = True
             return
+        # 挂载前顺手修复历史遗留的占位符名称（如 "Title (No HTML code allowed)"），
+        # 让老用户删掉重注册也能自动恢复为文件名。
+        self._fix_placeholder_names()
         task = MountTask(self.all_dicts(), self._cache_dir)
         task.mounted.connect(self._on_mounted)
         task.mount_failed.connect(self._on_mount_failed)
@@ -189,6 +193,19 @@ class DictionaryService(QObject):
         task.finished.connect(self._on_task_finished)
         self._loader = task
         task.start()
+
+    def _fix_placeholder_names(self):
+        """把已注册词库里属于模板占位符的名称改回文件名。
+
+        部分 MDX 作者未填写 <Title>，保留了生成器的默认占位符，
+        导致 TinyDict 把占位符当成了词典名。新注册流程会过滤掉，
+        这里处理历史数据。
+        """
+        for d in self.all_dicts():
+            if d.name.casefold() in _TITLE_PLACEHOLDERS:
+                title = quick_mdx_title(d.filename)
+                name = self._db.unique_dict_name(title or Path(d.filename).stem)
+                self._db.set_name(d.id, name)
 
     def mount_all_blocking(self):
         """同步挂载全部启用词库（测试 / 无 GUI 场景）。"""

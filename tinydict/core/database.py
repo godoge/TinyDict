@@ -201,6 +201,13 @@ class Database:
         )
         self.conn().commit()
 
+    def set_name(self, dict_id: int, name: str):
+        """更新词库显示名（占位符修复 / 用户重命名场景）。"""
+        self.conn().execute(
+            "UPDATE dicts SET name=? WHERE id=?", (name, dict_id)
+        )
+        self.conn().commit()
+
     def reorder(self, ordered_ids: Sequence[int]):
         """按给定顺序重写 sort_order（ordered_ids 即优先级从高到低）。"""
         c = self.conn()
