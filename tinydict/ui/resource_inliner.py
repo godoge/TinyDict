@@ -390,11 +390,9 @@ _CACHE_MAX = 1024
 #   修复做法：词条 HTML 里 data-snd 只放一个极小的 mdx:// 地址；真正取字节是点击时
 #     才发生（见下方 onclick），因此 HTML 体积恒定很小，彻底消除该上限问题。
 #
-# 为什么点击时用 XHR(mdx://)→Blob 播放，而不直接 <audio src="mdx://…">：
-#   - fetch() 对自定义 scheme 不生效（Chromium 白名单限制，会直接 Failed to fetch），
-#     因此改用 XMLHttpRequest（对已注册的自定义 scheme 放行）；
-#   - 直接把自定义 scheme 当媒体 src 在部分 Chromium 版本下加载脆弱，且需要 scheme
-#     handler 支持 Range 请求；XHR 取字节再包成 blob: URL 播放则不受此影响；
+# 为什么点击时 fetch(mdx://)→Blob 播放，而不直接 <audio src="mdx://…">：
+#   - 直接把自定义 scheme 当媒体 src 在部分 Chromium 版本下加载脆弱（这正是当初资源
+#     改为内联的初衷）；但 fetch 取字节再包成 blob: URL 播放则不受此影响；
 #   - mdx:// 是已注册且为「安全 scheme」的地址，scheme_handler 以 audio/mpeg 等正确
 #     MIME 返回字节，并自带跨词库回退（本词库没有的音频会去其它词库 MDD 找同名 mp3）；
 #   - href="#" + onclick 内 return false 彻底阻止导航，词条页不会被替换成空白页；
@@ -412,14 +410,8 @@ def _rewrite_sound_links(html: str, dict_id: int, service: DictionaryService = N
         return html
 
     # 点击时复用页面内唯一的 <audio> 节点播放。data-snd 里只是 mdx:// 地址（极小），
-    # 真正取字节发生在点击时：用 XMLHttpRequest 取字节包成 Blob URL（绕开自定义
-    # scheme 媒体加载的兼容性隐患），失败再退回到直接把 mdx:// 设为 src 的兜底做法。
-    #
-    # ⚠️ 为什么用 XHR 而不是 fetch()：
-    #   Chromium 的 fetch() API 有严格的 scheme 白名单，自定义 mdx:// scheme
-    #   即使已通过 QWebEngineUrlScheme 注册为 Secure/CorsEnabled，fetch() 仍会
-    #   直接抛 "TypeError: Failed to fetch"；而 XMLHttpRequest 对已注册的自定义
-    #   scheme 是放行的，所以用 XHR 取字节。
+    # 真正取字节发生在点击时：先 fetch 出字节包成 Blob URL（绕开自定义 scheme 媒体
+    # 加载的兼容性隐患），失败再退回到直接把 mdx:// 设为 src 的兜底做法。
     # onclick 内 JS 用双引号，外层 onclick 属性用单引号包裹，二者不冲突。
     onclick = (
         'var a=document.getElementById("sd_audio");'
@@ -431,17 +423,12 @@ def _rewrite_sound_links(html: str, dict_id: int, service: DictionaryService = N
         'if(a._obj){try{URL.revokeObjectURL(a._obj);}catch(e){}}'
         'function play(){var p=a.play();'
         'if(p&&p.catch){p.catch(function(e){console.error("sd-audio-fail",e);});}}'
-        # 首选：XHR 取字节 → Blob URL 播放（最稳，不受 scheme 媒体兼容性影响）
-        'var x=new XMLHttpRequest();'
-        'x.open("GET",url,true);x.responseType="blob";'
-        'x.onload=function(){'
-        'if(x.status>=200&&x.status<300){'
-        'a._obj=URL.createObjectURL(x.response);a.src=a._obj;play();}'
-        'else{console.error("sd-audio-xhr-status",x.status);a.src=url;play();}};'
-        'x.onerror=function(e){'
-        # 兜底：直接以 mdx:// 作为媒体 src（scheme handler 已支持 Range 请求）
-        'console.error("sd-audio-xhr-fail",e);a.src=url;play();};'
-        'x.send();'
+        # 首选：fetch 取字节 → Blob URL 播放（最稳，不受 scheme 媒体兼容性影响）
+        'fetch(url).then(function(r){return r.blob();}).then(function(b){'
+        'a._obj=URL.createObjectURL(b);a.src=a._obj;play();'
+        '}).catch(function(e){'
+        # 兜底：直接以 mdx:// 作为媒体 src（个别 Chromium 版本 fetch 受限时仍能播）
+        'console.error("sd-audio-fetch-fail",e);a.src=url;play();});'
         'return false;'
     )
 
