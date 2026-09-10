@@ -14,6 +14,7 @@ QWebEngineUrlScheme 注册为「安全 scheme」（并允许 CSP / CORS / 本地
 from urllib.parse import unquote
 
 from PySide6.QtCore import QBuffer, QIODevice
+from PySide6.QtNetwork import QHttpHeaders
 from PySide6.QtWebEngineCore import (
     QWebEngineUrlScheme,
     QWebEngineUrlSchemeHandler,
@@ -140,8 +141,58 @@ class MdxSchemeHandler(QWebEngineUrlSchemeHandler):
             job.fail(QWebEngineUrlRequestJob.UrlNotFound)
             return
 
+        # HTTP Range 请求支持：HTML5 <audio>/<video> 必须能做分段请求
+        # （Accept-Ranges + Content-Range + 206 语义），否则媒体引擎
+        # 会直接拒绝加载、报 DOMException。这里从请求头里解析 Range，
+        # 按字节切片返回，并补全相关响应头。
+        total = len(data)
+        range_hdr = ""
+        try:
+            headers = job.requestHeaders()
+            raw = None
+            if hasattr(headers, "value"):  # Qt6 QHttpHeaders
+                raw = headers.value("Range")
+            else:  # 兼容旧版 QMultiMap
+                raw = headers.value("Range", "")
+            if isinstance(raw, bytes):
+                range_hdr = raw.decode("latin-1", errors="ignore")
+            elif raw:
+                range_hdr = str(raw)
+        except Exception:  # noqa: BLE001 拿不到头就当无 Range
+            range_hdr = ""
+
+        start = 0
+        end = total - 1
+        is_partial = False
+        if range_hdr.lower().startswith("bytes="):
+            spec = range_hdr[6:].strip()
+            if "-" in spec:
+                s, e = spec.split("-", 1)
+                if s:
+                    start = int(s)
+                if e:
+                    end = int(e)
+                else:
+                    end = total - 1
+                if start > end or start >= total:
+                    # 越界：返回 416（通过 fail + RequestDenied 近似表达）
+                    job.fail(QWebEngineUrlRequestJob.RequestDenied)
+                    return
+                end = min(end, total - 1)
+                is_partial = True
+
+        chunk = data[start:end + 1]
         buf = QBuffer()
         buf.setParent(job)  # 生命周期随 job
-        buf.setData(data)
+        buf.setData(chunk)
         buf.open(QIODevice.OpenModeFlag.ReadOnly)
+
+        resp_headers = QHttpHeaders()
+        resp_headers.append("Accept-Ranges", "bytes")
+        resp_headers.append("Content-Length", str(len(chunk)))
+        if is_partial:
+            resp_headers.append(
+                "Content-Range",
+                f"bytes {start}-{end}/{total}")
+        job.setAdditionalResponseHeaders(resp_headers)
         job.reply(guess_mime(path).encode("ascii"), buf)
