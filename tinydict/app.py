@@ -5,6 +5,7 @@ from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from .config import Config
 from .core.database import Database
+from .core.history import HistoryBook
 from .core.query import DictionaryService
 from .core.wordbook import WordBook
 from .paths import cache_dir, config_path, db_path
@@ -31,6 +32,8 @@ class TrayController(QObject):
         act_dicts.triggered.connect(app.window.open_dict_manager)
         act_wb = menu.addAction("生词本…")
         act_wb.triggered.connect(app.window.open_wordbook)
+        act_history = menu.addAction("查询历史…")
+        act_history.triggered.connect(app.window.open_history)
         menu.addSeparator()
         act_about = menu.addAction("关于 TinyDict…")
         act_about.triggered.connect(app.window.open_about)
@@ -83,6 +86,7 @@ class TinyDictApp:
         self.db = Database(db_path())
         self.service = DictionaryService(self.db, cache_dir())
         self.wordbook = WordBook(self.db)
+        self.history = HistoryBook(self.db)
 
         # 主题管理器：根据 Config 初始化主题并应用到整个 QApplication
         self.theme_manager = ThemeManager(self.config, qapp)
@@ -90,7 +94,8 @@ class TinyDictApp:
 
         # 界面层
         self.window = MainWindow(self.service, self.config, self.wordbook,
-                                 theme_manager=self.theme_manager)
+                                 theme_manager=self.theme_manager,
+                                 history=self.history)
         self.tray = TrayController(self)
         self.window.set_tray(self.tray)
 
@@ -112,7 +117,10 @@ class TinyDictApp:
             lambda msg: self.window.notify(msg))
         self.capture.captured.connect(self.window.bring_up_and_lookup)
         self.capture.failed.connect(
-            lambda: self.window.notify("划词取词：未获取到选中文本"))
+            lambda: self.window.notify(
+                "划词取词：没读到选中的文字。\n"
+                "请先在其他程序中选中文字再按快捷键；"
+                "少数程序不支持复制，可试试用鼠标右键复制。"))
         self.window.settings_saved.connect(self._on_settings_saved)
         self.qapp.aboutToQuit.connect(self._shutdown)
 

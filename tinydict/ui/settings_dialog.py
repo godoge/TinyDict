@@ -4,7 +4,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout,
-    QLabel, QKeySequenceEdit, QVBoxLayout,
+    QLabel, QKeySequenceEdit, QPushButton, QVBoxLayout,
 )
 
 from ..config import Config
@@ -44,15 +44,43 @@ class SettingsDialog(QDialog):
         layout.setContentsMargins(14, 14, 14, 14)
 
         form = QFormLayout()
+
+        # ---- 显示 / 隐藏主窗口
         self._kse_toggle = QKeySequenceEdit(
             QKeySequence(self._keyboard_to_sequence(
                 str(self._config["hotkey_show_hide"]))))
-        form.addRow(QLabel("显示 / 隐藏主窗口："), self._kse_toggle)
+        self._btn_reset_toggle = QPushButton("默认")
+        self._btn_reset_toggle.setToolTip(
+            "恢复为默认快捷键：" + str(Config.DEFAULTS["hotkey_show_hide"]))
+        self._btn_reset_toggle.clicked.connect(
+            lambda: self._kse_toggle.setKeySequence(
+                QKeySequence(self._keyboard_to_sequence(
+                    Config.DEFAULTS["hotkey_show_hide"]))))
+        toggle_row = QHBoxLayout()
+        toggle_row.setContentsMargins(0, 0, 0, 0)
+        toggle_row.addWidget(self._kse_toggle)
+        toggle_row.addWidget(self._btn_reset_toggle)
+        toggle_row.addStretch(1)
+        form.addRow(QLabel("显示 / 隐藏主窗口："), toggle_row)
 
+        # ---- 屏幕划词取词
         self._kse_capture = QKeySequenceEdit(
             QKeySequence(self._keyboard_to_sequence(
                 str(self._config["hotkey_capture"]))))
-        form.addRow(QLabel("屏幕划词取词："), self._kse_capture)
+        self._btn_reset_capture = QPushButton("默认")
+        self._btn_reset_capture.setToolTip(
+            "恢复为默认快捷键：" + str(Config.DEFAULTS["hotkey_capture"]))
+        self._btn_reset_capture.clicked.connect(
+            lambda: self._kse_capture.setKeySequence(
+                QKeySequence(self._keyboard_to_sequence(
+                    Config.DEFAULTS["hotkey_capture"]))))
+        capture_row = QHBoxLayout()
+        capture_row.setContentsMargins(0, 0, 0, 0)
+        capture_row.addWidget(self._kse_capture)
+        capture_row.addWidget(self._btn_reset_capture)
+        capture_row.addStretch(1)
+        form.addRow(QLabel("屏幕划词取词："), capture_row)
+
         layout.addLayout(form)
 
         self._chk_capture = QCheckBox("启用屏幕划词取词")
@@ -79,6 +107,13 @@ class SettingsDialog(QDialog):
             "勾选后：所有词库的网络请求（在线发音 / 图片等）将被拦截，"
             "仅可使用词库自带的离线资源。\n不勾选（默认）：允许词库按需在线获取资源。")
         layout.addWidget(self._chk_offline)
+
+        self._chk_history = QCheckBox("记录查询历史（可在「历史」中查看）")
+        self._chk_history.setChecked(bool(self._config["history_enabled"]))
+        self._chk_history.setToolTip(
+            "开启后：每次查词会自动记入查询历史，方便回头翻看。\n"
+            "关闭后：不再新增记录，已有历史仍保留，可随时在「历史」中清空。")
+        layout.addWidget(self._chk_history)
 
         # ---- 主题选择
         theme_row = QHBoxLayout()
@@ -164,6 +199,7 @@ class SettingsDialog(QDialog):
         self._config["minimize_to_tray"] = self._chk_tray.isChecked()
         self._config["fill_input_on_select"] = self._chk_sync_input.isChecked()
         self._config["offline_mode"] = self._chk_offline.isChecked()
+        self._config["history_enabled"] = self._chk_history.isChecked()
         self._config["theme"] = self._cmb_theme.currentData()
         self._config["entry_theme"] = self._cmb_entry_theme.currentData()
         super().accept()

@@ -23,12 +23,14 @@ from urllib.parse import unquote
 
 from ..core.query import DictionaryService, EntryResult
 from ..core.wordbook import DEFAULT_GROUP_ID, WordBook
+from ..core.history import HistoryBook, display_text
 from ..core import dict_config
 from .. import __version__
 from ..config import Config
 from . import theme as _theme
 from .about_dialog import AboutDialog, RELEASES_URL, REPO_URL
 from .dict_manager_dialog import DictManagerDialog
+from .history_dialog import HistoryDialog
 from .resource_inliner import inline_resources
 from .scheme_handler import MdxSchemeHandler
 from .settings_dialog import SettingsDialog
@@ -649,11 +651,13 @@ class MainWindow(QMainWindow):
 
     def __init__(self, service: DictionaryService, config: Config,
                  wordbook: WordBook, theme_manager: "_theme.ThemeManager | None" = None,
-                 parent=None):
+                 history: "HistoryBook | None" = None, parent=None):
         super().__init__(parent)
         self._service = service
         self._config = config
         self.wordbook = wordbook
+        # 查询历史（可选：测试里不传即不记录）
+        self.history = history
         self._theme_manager = theme_manager
         self._results: list[EntryResult] = []
         self._current_word = ""
@@ -667,6 +671,7 @@ class MainWindow(QMainWindow):
         self._tray_message_shown = False
         self._wordbook_dialog = None
         self._dict_dialog = None
+        self._history_dialog = None
 
         self.setWindowTitle(f"TinyDict 离线词典 v{__version__}")
         self.resize(980, 680)
@@ -679,6 +684,8 @@ class MainWindow(QMainWindow):
         self._view.setHtml(welcome_page(self._current_theme_mode()), QUrl("mdx://0/"))
         self._suggest_timer = QTimer(self, singleShot=True, interval=250)
         self._suggest_timer.timeout.connect(self._refresh_suggestions)
+        # 启动时搜索框是空的，先把最近查过的词列出来（有历史才显示）
+        self._refresh_suggestions()
 
         # 词库挂载进度 / 完成（挂载式架构：后台加载 key 索引）
         self._mount_done = 0
@@ -817,6 +824,7 @@ class MainWindow(QMainWindow):
         for text, tip, slot in (
             ("词库", "管理 MDX 词库（导入 / 删除 / 优先级）", self.open_dict_manager),
             ("生词本", "查看生词本", self.open_wordbook),
+            ("历史", "查看查询历史", self.open_history),
             ("设置", "快捷键等设置", self.open_settings),
         ):
             b = QToolButton(text=text)
@@ -921,17 +929,33 @@ class MainWindow(QMainWindow):
         text = self.search_edit.text().strip()
         self.suggest_list.clear()
         if not text:
+            # 还没输入时，把最近查过的词直接列出来，点一下就能再看
+            self._fill_recent_history()
             return
         for word in self._service.suggest(text, limit=30):
             item = QListWidgetItem(word)
             item.setToolTip(word)
             self.suggest_list.addItem(item)
 
+    def _fill_recent_history(self):
+        """搜索框为空时用最近的查询历史填充候选列表。"""
+        if self.history is None:
+            return
+        if not bool(self._config["history_enabled"]):
+            return
+        for word, queried_at, times in self.history.recent(limit=30):
+            item = QListWidgetItem(display_text(word, queried_at, times))
+            item.setData(Qt.ItemDataRole.UserRole, word)
+            item.setToolTip(f"{word} · 最近查过")
+            self.suggest_list.addItem(item)
+
     def _on_suggestion_clicked(self, item: QListWidgetItem):
         # 是否把点击的词条同步写入搜索框，由设置 fill_input_on_select 控制
         # （默认关闭：只显示释义，不改变搜索框内容，便于在候选列表里连续浏览）。
+        # 历史记录项的显示文本带时间后缀，真正的词存在 UserRole 里
+        word = item.data(Qt.ItemDataRole.UserRole) or item.text()
         self.do_lookup(
-            item.text(),
+            str(word),
             sync_input=bool(self._config["fill_input_on_select"]),
         )
 
@@ -1028,6 +1052,14 @@ class MainWindow(QMainWindow):
 
         if push_history:
             self._push_history(word)
+
+        # 记录查询历史：只在"查到了"或"结果待补齐"时记，
+        # 避免把随手打错的词也塞进历史。
+        if self.history is not None and bool(self._config["history_enabled"]):
+            if self._results or pending:
+                self.history.record(word)
+                if self._history_dialog is not None:
+                    self._history_dialog.refresh_if_visible()
 
         self._update_star()
         # 仅当搜索框内容被本次查词改变时，才刷新候选列表
@@ -1345,6 +1377,23 @@ class MainWindow(QMainWindow):
         self._wordbook_dialog.show()
         self._wordbook_dialog.raise_()
         self._wordbook_dialog.activateWindow()
+
+    def open_history(self):
+        """打开查询历史窗口（没有历史对象时直接提示，不弹空窗）。"""
+        if self.history is None:
+            QMessageBox.information(self, "查询历史", "当前未启用查询历史。")
+            return
+        if self._history_dialog is None:
+            self._history_dialog = HistoryDialog(
+                self.history, config=self._config,
+                theme_manager=self._theme_manager, parent=self)
+            # 不走 bring_up_and_lookup：那个会强行把主窗口抬到最前，
+            # 翻历史时窗口被盖住就没法连续查看了。
+            self._history_dialog.lookupRequested.connect(self.do_lookup)
+        self._history_dialog.refresh()
+        self._history_dialog.show()
+        self._history_dialog.raise_()
+        self._history_dialog.activateWindow()
 
     def open_settings(self):
         dlg = SettingsDialog(self._config, self)

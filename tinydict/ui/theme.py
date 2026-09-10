@@ -330,6 +330,20 @@ QListWidget#wb_word_list::item{padding:5px 10px;}
 QListWidget#wb_word_list::item:selected{background:#dbeafe;color:#111827;}
 QLabel#wb_count{color:#6b7280;font-size:12px;padding:0 2px 2px 2px;}
 QLabel#wb_title{color:#374151;font-size:12px;font-weight:600;}
+/* 查询历史窗口（过滤框 + 记录列表）复用同一套列表型对话框风格 */
+QLineEdit#history_filter{
+    border:1px solid #d1d5db;border-radius:6px;padding:6px 10px;
+    font-size:13px;background:#fff;color:#111827;
+    selection-background-color:#dbeafe;
+}
+QLineEdit#history_filter:focus{border-color:#2563eb;}
+QListWidget#history_list{
+    border:1px solid #e5e7eb;border-radius:6px;background:#fff;font-size:14px;
+    outline:0;
+}
+QListWidget#history_list::item{padding:5px 10px;}
+QListWidget#history_list::item:selected{background:#dbeafe;color:#111827;}
+QLabel#history_count{color:#6b7280;font-size:12px;padding:0 2px 2px 2px;}
 QPushButton{padding:4px 10px;font-size:13px;}
 """
 
@@ -348,12 +362,25 @@ QListWidget#wb_word_list::item{padding:5px 10px;}
 QListWidget#wb_word_list::item:selected{background:#1f4e79;color:#fff;}
 QLabel#wb_count{color:#9ca3af;font-size:12px;padding:0 2px 2px 2px;}
 QLabel#wb_title{color:#e5e7eb;font-size:12px;font-weight:600;}
+QLineEdit#history_filter{
+    border:1px solid #374151;border-radius:6px;padding:6px 10px;
+    font-size:13px;background:#2d2d30;color:#d4d4d4;
+    selection-background-color:#3b82f6;selection-color:#fff;
+}
+QLineEdit#history_filter:focus{border-color:#60a5fa;}
+QListWidget#history_list{
+    border:1px solid #374151;border-radius:6px;background:#2d2d30;
+    font-size:14px;outline:0;color:#d4d4d4;
+}
+QListWidget#history_list::item{padding:5px 10px;}
+QListWidget#history_list::item:selected{background:#1f4e79;color:#fff;}
+QLabel#history_count{color:#9ca3af;font-size:12px;padding:0 2px 2px 2px;}
 QPushButton{padding:4px 10px;font-size:13px;}
 """
 
 
 def wb_qss(mode: str) -> str:
-    """生词本对话框的样式表。"""
+    """生词本 / 查询历史等列表型对话框共用的样式表。"""
     base = _WB_QSS_DARK if mode == "dark" else _WB_QSS_LIGHT
     return base + scrollbar_qss(mode)
 

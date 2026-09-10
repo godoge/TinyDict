@@ -5,6 +5,7 @@
 - wordbook       : 生词本（生词本体，记录首次加入时间）
 - wordbook_groups: 生词本分组
 - wordbook_tags  : 生词 ↔ 分组 关联（标签式多归属：一个词可属于多个分组）
+- history        : 查询历史（按词去重，记录最近查询时间与累计次数）
 
 词条正文与 MDD 资源**不再入库**：查询与资源渲染直接从挂载的
 .mdx/.mdd 原文件按需读取（详见 core.mdx_access）。
@@ -81,6 +82,12 @@ CREATE TABLE IF NOT EXISTS wordbook_tags(
     PRIMARY KEY(word, group_id)
 );
 CREATE INDEX IF NOT EXISTS idx_wordbook_tags_group ON wordbook_tags(group_id);
+CREATE TABLE IF NOT EXISTS history(
+    word TEXT PRIMARY KEY,
+    queried_at TEXT NOT NULL,
+    times INTEGER DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_history_time ON history(queried_at DESC);
 """
 
 
@@ -441,3 +448,77 @@ class Database:
         ).fetchall()
         return {"all": total, "ungrouped": ungrouped,
                 "groups": {r[0]: r[1] for r in rows}}
+
+    # -------------------------------------------------------------- 查询历史
+    def history_record(self, word: str, limit: int) -> bool:
+        """记录一次查询：已存在则刷新时间并累加次数，否则新增。
+
+        按词去重（大小写不敏感），历史列表里同一个词只占一行。
+        超过 limit 时淘汰最久未查询的记录，避免无限增长。
+        """
+        word = (word or "").strip()
+        if not word:
+            return False
+        c = self.conn()
+        # 时间精确到微秒：同一秒内连续查多个词时，排序与裁剪才分得出先后
+        # （秒级时间戳会让"谁最久没查"变得随机）。rowid 作为次级排序兜底。
+        now = datetime.now().isoformat()
+        row = c.execute(
+            "SELECT word FROM history WHERE word=? COLLATE NOCASE", (word,)
+        ).fetchone()
+        if row is not None:
+            c.execute(
+                "UPDATE history SET queried_at=?, times=times+1 WHERE word=?",
+                (now, row[0]))
+        else:
+            c.execute(
+                "INSERT INTO history(word, queried_at, times) VALUES(?,?,1)",
+                (word, now))
+            if limit > 0:
+                over = (c.execute(
+                    "SELECT COUNT(*) FROM history").fetchone()[0] or 0) - limit
+                if over > 0:
+                    c.execute(
+                        "DELETE FROM history WHERE rowid IN ("
+                        "SELECT rowid FROM history"
+                        " ORDER BY queried_at ASC, rowid ASC LIMIT ?)", (over,))
+        c.commit()
+        return True
+
+    def history_recent(self, limit: int = 200, keyword: str = ""
+                       ) -> List[tuple]:
+        """返回 [(word, queried_at, times)]，按最近查询时间倒序。
+
+        keyword 非空时只返回包含该片段的词（不区分大小写）。
+        """
+        c = self.conn()
+        kw = (keyword or "").strip()
+        if kw:
+            rows = c.execute(
+                "SELECT word, queried_at, times FROM history"
+                " WHERE word LIKE ? COLLATE NOCASE"
+                " ORDER BY queried_at DESC, rowid DESC LIMIT ?",
+                (f"%{kw}%", max(limit, 0) or 200)
+            ).fetchall()
+        else:
+            rows = c.execute(
+                "SELECT word, queried_at, times FROM history"
+                " ORDER BY queried_at DESC, rowid DESC LIMIT ?",
+                (max(limit, 0) or 200,)
+            ).fetchall()
+        return [(r[0], r[1] or "", r[2] or 1) for r in rows]
+
+    def history_remove(self, word: str) -> bool:
+        cur = self.conn().execute(
+            "DELETE FROM history WHERE word=?", ((word or "").strip(),))
+        self.conn().commit()
+        return cur.rowcount > 0
+
+    def history_clear(self):
+        c = self.conn()
+        c.execute("DELETE FROM history")
+        c.commit()
+
+    def history_count(self) -> int:
+        return self.conn().execute(
+            "SELECT COUNT(*) FROM history").fetchone()[0] or 0
