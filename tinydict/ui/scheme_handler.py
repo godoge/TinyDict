@@ -122,8 +122,14 @@ class MdxSchemeHandler(QWebEngineUrlSchemeHandler):
         host = url.host()  # 词条所属词库 id（来自 baseUrl）
         # 浏览器会对路径做 URL 编码（如 \ -> %5C、空格 -> %20），
         # 先解码再归一化，才能与 MDD 内资源 key 匹配。
-        path = unquote(url.path()).replace("\\", "/").lstrip("/").lower()
-        path = path.split("?")[0].split("#")[0]
+        # 注意：?query 和 #fragment 的切分必须在 unquote 之前做——
+        #   部分词典的资源文件名本身含 #（如 _good#_brs_25.mp3），
+        #   在 URL 里被编码为 %23；若先 unquote 再 split("#")，
+        #   会把文件名里的 # 误判为 fragment 分隔符而截断路径，
+        #   导致资源 404、例句音频无法播放。
+        raw_path = url.path()
+        raw_path = raw_path.split("?")[0].split("#")[0]
+        path = unquote(raw_path).replace("\\", "/").lstrip("/").lower()
         if not path:
             job.fail(QWebEngineUrlRequestJob.UrlNotFound)
             return
