@@ -1,5 +1,7 @@
 # TinyDict — Windows 桌面离线 MDX 词典
 
+[![Star History Chart](https://api.star-history.com/svg?repos=godoge/TinyDict&type=Date)](https://star-history.com/#godoge/TinyDict&Date)
+
 一款基于 MDX / MDD 格式的 **单机离线** 词典软件：
 
 - 仅本地解析 MDX / MDD 词库，**无任何联网查词功能**，运行时不发起网络请求；
