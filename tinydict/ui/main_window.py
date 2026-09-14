@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from PySide6.QtGui import QClipboard, QColor, QDesktopServices, QGuiApplication
-from PySide6.QtCore import Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QByteArray, QEvent, Qt, QTimer, QUrl, Signal
 from PySide6.QtWidgets import (
     QComboBox, QFrame, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
     QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox, QSplitter,
@@ -678,6 +678,10 @@ class MainWindow(QMainWindow):
         self._apply_qss()
 
         self._build_ui()
+        # 恢复上次退出时的窗口大小 / 位置 / 左右栏比例
+        # （必须在 _build_ui 之后，那时 splitter 才存在）
+        self._restore_window_state()
+        QGuiApplication.instance().aboutToQuit.connect(self._save_window_state)
         # 顶栏分组下拉框（★ 的归属分组）；生词变化时同步刷新计数
         self._reload_groups()
         self.wordbook_changed.connect(self._reload_groups)
@@ -687,20 +691,15 @@ class MainWindow(QMainWindow):
         # 启动时搜索框是空的，先把最近查过的词列出来（有历史才显示）
         self._refresh_suggestions()
 
-        # 词库挂载进度 / 完成（挂载式架构：后台加载 key 索引）
-        self._mount_done = 0
-        self._mount_total = 0
+        # 词库后台挂载进度 / 完成（挂载式架构：后台加载 key 索引）。
+        # 只能 connect 一次：Qt 对相同的 (signal, slot) 不做去重，重复连接
+        # 会让槽函数每次被调用多遍（此前这里有两段几乎一样的连接代码，
+        # 导致每部词库挂载完成后 _on_dict_mounted 触发两次）。
         self._service.mount_progress.connect(self._on_mount_progress)
         self._service.dict_mounted.connect(self._on_dict_mounted)
         self._service.dict_mount_failed.connect(
             lambda _id, _msg: self._refresh_dict_status())
         self._service.mount_finished.connect(self._refresh_dict_status)
-
-        # 词库后台挂载进度/完成（挂载式架构）
-        self._mount_total = 0
-        self._mount_done = 0
-        self._service.mount_progress.connect(self._on_mount_progress)
-        self._service.dict_mounted.connect(self._on_dict_mounted)
 
         # 主题变化时自动刷新
         if self._theme_manager is not None:
@@ -798,6 +797,8 @@ class MainWindow(QMainWindow):
         self.search_edit.setClearButtonEnabled(True)
         self.search_edit.returnPressed.connect(self._on_return)
         self.search_edit.textChanged.connect(self._on_text_changed)
+        # 方向键在候选列表里上下移动选择（否则只能拿鼠标点）
+        self.search_edit.installEventFilter(self)
 
         # 顶栏去掉搜索框后，左端放导航、右端放功能按钮，中间弹性撑开
         top.addStretch(1)
@@ -899,13 +900,14 @@ class MainWindow(QMainWindow):
         left_vbox.addWidget(self.search_edit)
         left_vbox.addWidget(self.suggest_list, stretch=1)
 
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.addWidget(left_panel)
-        splitter.addWidget(entry_page)
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
-        splitter.setSizes([230, 750])
-        root.addWidget(splitter, stretch=1)
+        # 存为成员：退出时要 saveState() 持久化左右栏比例
+        self._splitter = QSplitter(Qt.Orientation.Horizontal)
+        self._splitter.addWidget(left_panel)
+        self._splitter.addWidget(entry_page)
+        self._splitter.setStretchFactor(0, 0)
+        self._splitter.setStretchFactor(1, 1)
+        self._splitter.setSizes([230, 750])
+        root.addWidget(self._splitter, stretch=1)
 
         self.setCentralWidget(central)
 
@@ -959,8 +961,53 @@ class MainWindow(QMainWindow):
             sync_input=bool(self._config["fill_input_on_select"]),
         )
 
+    def eventFilter(self, obj, event):
+        """搜索框的上下键在候选列表里移动选择（默认只能用鼠标点）。
+
+        PageUp / PageDown 一次跳 5 条，长列表翻得快些。事件在这里被吃掉
+        （返回 True），避免 QLineEdit 再拿它做光标移动。
+        """
+        if obj is not self.search_edit or event.type() != QEvent.Type.KeyPress:
+            return super().eventFilter(obj, event)
+        steps = {
+            Qt.Key.Key_Up: -1,
+            Qt.Key.Key_Down: 1,
+            Qt.Key.Key_PageUp: -5,
+            Qt.Key.Key_PageDown: 5,
+        }.get(event.key())
+        if steps is None or self.suggest_list.count() == 0:
+            return super().eventFilter(obj, event)
+        self._move_suggestion(steps)
+        return True
+
+    def _move_suggestion(self, steps: int):
+        """把候选列表的高亮移动 steps 行（到头后停在原地，不循环）。"""
+        count = self.suggest_list.count()
+        row = self.suggest_list.currentRow()
+        if row < 0:
+            row = 0 if steps > 0 else count - 1
+        else:
+            row = min(max(row + steps, 0), count - 1)
+        self.suggest_list.setCurrentRow(row)
+        item = self.suggest_list.item(row)
+        if item is None:
+            return
+        self.suggest_list.scrollToItem(item)
+        # 与鼠标点击行为保持一致：仅在配置要求时才同步填入搜索框。
+        # 填入前必须阻塞 textChanged，否则会立刻触发新一轮联想刷新，
+        # 把刚移动过去的高亮冲掉。
+        if self._config["fill_input_on_select"]:
+            self.search_edit.blockSignals(True)
+            self.search_edit.setText(item.text())
+            self.search_edit.blockSignals(False)
+
     def _on_return(self):
-        text = self.search_edit.text().strip()
+        # 上下键选中的候选词优先于输入框原文：未开启「填入搜索框」时，
+        # 两者并不相同，直接回车必须以看到的高亮项为准。
+        item = self.suggest_list.currentItem()
+        text = item.text().strip() if item is not None else ""
+        if not text:
+            text = self.search_edit.text().strip()
         if text:
             self.do_lookup(text)
 
@@ -1087,10 +1134,6 @@ class MainWindow(QMainWindow):
             1 for d in self._service.enabled_dicts()
             if not self._service.is_mounted(d.id)
         )
-
-    def _current_result(self):
-        idx = max(self._tabs.currentIndex(), 0)
-        return self._results[min(idx, len(self._results) - 1)]
 
     def _render_current(self):
         if not self._results:
@@ -1336,11 +1379,7 @@ class MainWindow(QMainWindow):
             self._status_dict.setToolTip("")
 
     def _on_mount_progress(self, done: int, total: int, name: str):
-        self._mount_done, self._mount_total = done, total
-        self._status_dict.setText(
-            f"词库加载中 {done}/{total}：{name}")
-        if not self._results and not self._current_word:
-            pass  # 无当前查询时仅更新状态栏
+        self._status_dict.setText(f"词库加载中 {done}/{total}：{name}")
 
     def _on_dict_mounted(self, dict_id: int):
         self._refresh_dict_status()
@@ -1439,6 +1478,60 @@ class MainWindow(QMainWindow):
         self._status_info.setText(text)
 
     # ---------------------------------------------------------------- 发音播放
+    # --------------------------------------------------- 窗口几何持久化
+    def _restore_window_state(self):
+        """恢复上次退出时的窗口大小 / 位置 / 左右栏比例。
+
+        保存下来的位置是屏幕坐标：如果用户之后拔掉了外接显示器，恢复出来
+        的位置会落在屏幕外，表现就是"窗口消失了"。所以恢复后要检查窗口
+        中心是否仍落在某个屏幕的可用区域内，不在就挪回主屏幕中央。
+        """
+        geo = str(self._config["window_geometry"] or "")
+        if geo:
+            self.restoreGeometry(QByteArray.fromBase64(geo.encode("ascii")))
+            if not self._geometry_on_screen():
+                self._center_on_primary_screen()
+        state = str(self._config["splitter_state"] or "")
+        if state and self._splitter is not None:
+            self._splitter.restoreState(
+                QByteArray.fromBase64(state.encode("ascii")))
+
+    def _save_window_state(self):
+        """把当前窗口几何与左右栏比例写入配置。
+
+        挂在 aboutToQuit 上：无论从窗口关闭、托盘退出还是快捷键退出都会触发，
+        比只在 closeEvent 里保存可靠（closeEvent 在"最小化到托盘"时根本不走
+        退出分支）。
+        """
+        geo = self.saveGeometry().toBase64().data().decode("ascii")
+        if geo:
+            self._config["window_geometry"] = geo
+        if self._splitter is not None:
+            state = self._splitter.saveState().toBase64().data().decode("ascii")
+            if state:
+                self._config["splitter_state"] = state
+        self._config.save()
+
+    def _geometry_on_screen(self) -> bool:
+        """窗口中心是否落在某个屏幕的可用区域内。"""
+        center = self.frameGeometry().center()
+        return any(scr.availableGeometry().contains(center)
+                   for scr in QGuiApplication.screens())
+
+    def _center_on_primary_screen(self):
+        """把窗口挪回主屏幕中央（几何落在屏幕外时的兜底）。"""
+        scr = QGuiApplication.primaryScreen()
+        if scr is None:
+            return
+        avail = scr.availableGeometry()
+        if avail.width() <= 0 or avail.height() <= 0:
+            return
+        # 注意：move() 收的是 frame 左上角的「目标坐标」，不是位移量。
+        # 直接把「中心偏差」传给 move() 会把窗口推到更远的地方——
+        # 必须先算出偏差，再加到当前左上角坐标上。
+        delta = avail.center() - self.frameGeometry().center()
+        self.move(self.pos() + delta)
+
     # ---------------------------------------------------------------- 关闭行为
     def closeEvent(self, event):
         if (self._config["minimize_to_tray"] and self._tray is not None

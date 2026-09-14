@@ -296,8 +296,13 @@ class _LazyMixin:
         pfx = (prefix or "").strip()
         if not pfx:
             return []
+        # 大小写变体：输入的原形 + 全小写。二者相同时（用户输入的本来就是
+        # 小写）必须只扫一轮，否则同一批词会被收集两遍、白吃掉 limit 配额，
+        # 上层按 key 去重后候选数直接腰斩（实测 limit=30 时 "aa" 只剩 18 条）。
+        variants = [pfx] if pfx == pfx.lower() else [pfx, pfx.lower()]
         out: List[str] = []
-        for variant in (pfx, pfx.lower()):
+        seen = set()
+        for variant in variants:
             b = variant.encode("utf-8")
             i = bisect_left(self._sorted_texts, b)
             n = len(self._sorted_texts)
@@ -305,7 +310,12 @@ class _LazyMixin:
                 t = self._sorted_texts[i]
                 if not t.startswith(b):
                     break
-                out.append(t.decode("utf-8", errors="ignore"))
+                s = t.decode("utf-8", errors="ignore")
+                # 两个变体的匹配区间可能重叠（如 "Zoo" 与 "zoo"），用 seen
+                # 兜底，保证 limit 全部分给不重复的词。
+                if s not in seen:
+                    seen.add(s)
+                    out.append(s)
                 i += 1
         return out
 

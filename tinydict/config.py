@@ -24,6 +24,10 @@ class Config:
     #                          对所有词库一视同仁，不针对任何具体词库）；
     #                          "native" 保持词库原样，完全不干预；
     #                          "light" / "dark" 固定为浅色 / 深色。
+    # - window_geometry      : 主窗口大小与位置的 base64（Qt saveGeometry 结果）。
+    #                          空字符串表示首次启动，用代码里的默认尺寸。
+    # - splitter_state       : 左栏（搜索/候选）与右栏（词条）比例的 base64
+    #                          （Qt QSplitter.saveState 结果）；空则用默认比例。
     DEFAULTS = {
         "hotkey_show_hide": "ctrl+alt+d",
         "hotkey_capture": "ctrl+alt+q",
@@ -35,6 +39,8 @@ class Config:
         "history_enabled": True,
         "theme": "system",
         "entry_theme": "follow",
+        "window_geometry": "",
+        "splitter_state": "",
     }
 
     def __init__(self, path: Path):
