@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from PySide6.QtGui import QClipboard, QColor, QDesktopServices, QGuiApplication
-from PySide6.QtCore import QByteArray, QEvent, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QByteArray, QEvent, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtWidgets import (
     QComboBox, QFrame, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
     QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox, QSplitter,
@@ -28,6 +28,7 @@ from ..core import dict_config
 from .. import __version__
 from ..config import Config
 from . import theme as _theme
+from .icons import nav_icon
 from .about_dialog import AboutDialog, RELEASES_URL, REPO_URL
 from .dict_manager_dialog import DictManagerDialog
 from .history_dialog import HistoryDialog
@@ -418,7 +419,7 @@ def welcome_page(theme_mode: str = "light") -> str:
     return _page("""
 <div class="sd-welcome">
 <h1>TinyDict</h1>
-<p class="sd-tip">离线 MDX 词典 &middot; 数据保存在本机；如需在线资源可在「设置」中关闭强制离线</p>
+<p class="sd-tip">MDX 词典 &middot; 词库保存在本机，查词不上传任何内容</p>
 <ul>
 <li>点击右上角<b>「词库」</b>添加 <code>.mdx</code> 文件，或直接选择
 <b>词库文件夹</b>（自动扫描其中全部词库）—— 即加即用，无需导入</li>
@@ -673,7 +674,7 @@ class MainWindow(QMainWindow):
         self._dict_dialog = None
         self._history_dialog = None
 
-        self.setWindowTitle(f"TinyDict 离线词典 v{__version__}")
+        self.setWindowTitle(f"TinyDict v{__version__}")
         self.resize(980, 680)
         self._apply_qss()
 
@@ -755,6 +756,7 @@ class MainWindow(QMainWindow):
     def _reapply_theme(self, new_mode: str):
         """主题变化时调用：更新 QSS、通知 DictPage、并重新渲染当前词条。"""
         self._apply_qss()
+        self._refresh_nav_icons()
         self._apply_page_background()
         # 让已加载词条立即按新的目标明暗重算（无需重新渲染也能生效）
         self._page.set_theme_mode(new_mode, self._entry_target())
@@ -767,6 +769,21 @@ class MainWindow(QMainWindow):
             # 欢迎页也换肤
             self._view.setHtml(
                 welcome_page(new_mode), QUrl("mdx://0/"))
+
+    def _refresh_nav_icons(self):
+        """给顶栏导航按钮重画图标，描边色取当前主题的文字色。
+
+        导航图标是用 QPainter 现画的位图，不像 QSS 里的 color 会随主题自动变，
+        所以换肤时必须重画一次，否则浅色主题下会残留深灰图标、几乎看不见。
+        调用方：首次建窗口在 _build_ui 末尾，之后每次换肤在 _reapply_theme。
+        """
+        if not getattr(self, "_nav_buttons", None):
+            return  # _build_ui 之前被调用时直接跳过（理论上不会发生）
+        color = QColor(_theme.toolbutton_fg(self._current_theme_mode()))
+        icon_size = QSize(18, 18)
+        for btn, kind in self._nav_buttons:
+            btn.setIcon(nav_icon(kind, color))
+            btn.setIconSize(icon_size)
 
     # ---------------------------------------------------------------- UI
     def _build_ui(self):
@@ -817,27 +834,30 @@ class MainWindow(QMainWindow):
         self.group_combo.currentIndexChanged.connect(self._on_group_combo_changed)
         top.addWidget(self.group_combo)
 
-        self._btn_pin = QToolButton(text="置顶", checkable=True)
-        self._btn_pin.setToolTip("窗口常驻最前")
-        self._btn_pin.clicked.connect(self._on_pin)
-        top.addWidget(self._btn_pin)
-
-        for text, tip, slot in (
-            ("词库", "管理 MDX 词库（导入 / 删除 / 优先级）", self.open_dict_manager),
-            ("生词本", "查看生词本", self.open_wordbook),
-            ("历史", "查看查询历史", self.open_history),
-            ("设置", "快捷键等设置", self.open_settings),
+        # 顶栏功能按钮：图标 + 文字。统一用这张表创建，避免六处按钮各写一段、
+        # 加图标时漏掉某个；kind 对应 icons.nav_icon 支持的图形。
+        # 图标是运行时画的，浅/深主题下颜色不同，统一由 _refresh_nav_icons 生成。
+        self._nav_buttons = []
+        for kind, text, tip, slot, checkable in (
+            ("pin", "置顶", "窗口常驻最前", self._on_pin, True),
+            ("dict", "词库", "管理 MDX 词库（导入 / 删除 / 优先级）",
+             self.open_dict_manager, False),
+            ("wordbook", "生词本", "查看生词本", self.open_wordbook, False),
+            ("history", "历史", "查看查询历史", self.open_history, False),
+            ("settings", "设置", "快捷键等设置", self.open_settings, False),
+            ("about", "关于", "关于本软件", self.open_about, False),
         ):
-            b = QToolButton(text=text)
-            b.setToolTip(tip)
-            b.clicked.connect(slot)
-            top.addWidget(b)
-
-        # 「关于」按钮：直接弹出关于对话框
-        self._btn_about = QToolButton(text="关于")
-        self._btn_about.setToolTip("关于本软件")
-        self._btn_about.clicked.connect(self.open_about)
-        top.addWidget(self._btn_about)
+            btn = QToolButton(text=text, checkable=checkable)
+            btn.setToolTip(tip)
+            # 图标与文字并排：原按钮都有文字标签，保留可避免只剩图形时看不懂
+            btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+            btn.clicked.connect(slot)
+            top.addWidget(btn)
+            self._nav_buttons.append((btn, kind))
+        # 别的方法会用到这两个句柄，创建方式变了也要保证名字仍指向对应按钮
+        self._btn_pin = self._nav_buttons[0][0]
+        self._btn_about = self._nav_buttons[-1][0]
+        self._refresh_nav_icons()
         root.addLayout(top)
 
         # ---- 词典切换（多部词库命中时显示在词条页上方）

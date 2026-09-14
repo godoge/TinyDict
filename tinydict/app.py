@@ -3,6 +3,7 @@
 from PySide6.QtCore import QObject
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
+from . import __version__
 from .config import Config
 from .core.database import Database
 from .core.history import HistoryBook
@@ -23,7 +24,7 @@ class TrayController(QObject):
         super().__init__(parent)
         self._app = app
         self._tray = QSystemTrayIcon(app_icon(), self)
-        self._tray.setToolTip("TinyDict 离线词典")
+        self._tray.setToolTip(f"TinyDict v{__version__}")
 
         menu = QMenu()
         act_toggle = menu.addAction("显示 / 隐藏主窗口")

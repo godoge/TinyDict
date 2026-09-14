@@ -68,8 +68,8 @@ class AboutDialog(QDialog):
             f'<span style="font-size:13px"> &nbsp;v{__version__}</span>')
         col.addWidget(title)
         desc = QLabel(
-            "一款 Windows 上的离线词典：添加自己的 .mdx 词库后即加即用，"
-            "查词全程在你自己的电脑上完成，不联网、不上传任何内容。")
+            "一款 Windows 上的 MDX 词典：添加自己的 .mdx 词库后即加即用，"
+            "查词全程在你自己的电脑上完成，不上传任何内容。")
         desc.setWordWrap(True)
         desc.setFixedWidth(300)
         col.addWidget(desc)

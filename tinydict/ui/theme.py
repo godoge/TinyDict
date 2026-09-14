@@ -315,6 +315,17 @@ def app_qss(mode: str) -> str:
     return base + scrollbar_qss(mode)
 
 
+def toolbutton_fg(mode: str) -> str:
+    """顶栏 QToolButton 的前景（文字 / 图标）色，返回值可直接喂给 QColor。
+
+    必须与 app_qss 里 QToolButton 的文字色一致：
+      - 深色主题在 QSS 中显式写了 #d4d4d4，这里取同值；
+      - 浅色主题没给 QToolButton 写规则（走 Fusion 默认色），这里补一个同
+        灰阶的值，让"画出来的图标"和"排出来的文字"永远是同一个颜色。
+    """
+    return "#d4d4d4" if mode == "dark" else "#374151"
+
+
 _WB_QSS_LIGHT = """
 QListWidget#wb_group_list{
     border:1px solid #e5e7eb;border-radius:6px;background:#fff;font-size:14px;
