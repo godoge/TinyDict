@@ -4,21 +4,23 @@
 - wordbook        ：生词本体（记录首次加入时间），
 - wordbook_tags   ：生词 ↔ 分组 的关联。
 
-由此派生出两种「视图」：
-- ALL_GROUPS(-1)：全部生词；
-- UNGROUPED(0)  ：已加入生词本但不属于任何分组的生词（例如被移出最后一个
-                  分组后保留下来的词）。
+视图：ALL_GROUPS(-1) 表示全部生词；正整数表示某个分组。
+
+**不变量：每个生词必须至少属于一个分组**，没有「未分组」这种状态。
+把词移出最后一个分组、删除分组、清空分组之后，它会自动归入默认分组
+（DEFAULT_GROUP_ID）；只有「从默认分组移出 / 清空默认分组」例外，此时
+视为从生词本中移除。数据层负责兜底（database._ensure_has_group）。
 """
 
 from typing import List, Optional, Sequence, Tuple
 
 from .database import (
-    ALL_GROUPS, DEFAULT_GROUP_ID, UNGROUPED, Database, WordGroup,
+    ALL_GROUPS, DEFAULT_GROUP_ID, Database, WordGroup,
 )
 
 __all__ = [
     "WordBook", "WordGroup",
-    "ALL_GROUPS", "UNGROUPED", "DEFAULT_GROUP_ID",
+    "ALL_GROUPS", "DEFAULT_GROUP_ID",
 ]
 
 
@@ -56,7 +58,7 @@ class WordBook:
     def remove_group(self, group_id: int, with_words: bool = False) -> int:
         """删除分组，返回受影响的生词条数。
 
-        with_words=False：生词保留（只属于本分组的词变为「未分组」）；
+        with_words=False：生词保留（只属于本分组的词归入默认分组）；
         with_words=True ：连同这些生词一起从生词本删除。
         """
         return self._db.group_remove(group_id, with_words)
@@ -107,6 +109,60 @@ class WordBook:
         """返回 [(word, added_at)]，按加入时间倒序。"""
         return self._db.wordbook_list(group_id)
 
+    def export_rows(
+            self,
+            group_id: int = ALL_GROUPS) -> List[Tuple[str, str, List[str]]]:
+        """导出用：[(word, added_at, [所属分组名…])]。"""
+        return self._db.wordbook_export(group_id)
+
+    def restore(self, payload: dict) -> dict:
+        """从 JSON 备份合并恢复（不覆盖、不删除现有数据）。
+
+        payload 为 wordbook_io.parse_backup 的结果。缺少的分组自动新建，
+        已存在的词跳过（只补它还没有的分组归属）。
+
+        返回 {'words': 新增生词数, 'tags': 新增分组归属数, 'groups': 新建分组数}
+        """
+        name_to_id = {g.name: g.id for g in self.groups()}
+        new_groups = 0
+
+        def _group_id(name: str):
+            nonlocal new_groups
+            gid = name_to_id.get(name)
+            if gid is not None:
+                return gid
+            g = self.add_group(name)
+            if g is None:                       # 理论上不会发生（刚查过清单）
+                return None
+            name_to_id[name] = g.id
+            new_groups += 1
+            return g.id
+
+        for name in (payload.get("groups") or []):
+            if name:
+                _group_id(name)
+
+        new_words = 0
+        new_tags = 0
+        for item in (payload.get("words") or []):
+            word = (item.get("word") or "").strip()
+            if not word:
+                continue
+            existed = self._db.wordbook_has(word)
+            names = [n for n in (item.get("groups") or []) if n]
+            if not names:
+                # 备份里没写分组（老备份）：归入默认分组，不允许无归属
+                names = [self.group_name(DEFAULT_GROUP_ID) or "默认分组"]
+            for name in names:
+                gid = _group_id(name)
+                if gid is None:
+                    continue
+                if self._db.wordbook_add(word, gid):
+                    new_tags += 1
+            if not existed:
+                new_words += 1
+        return {"words": new_words, "tags": new_tags, "groups": new_groups}
+
     def stats(self) -> dict:
-        """{'all': 全部生词数, 'ungrouped': 未分组数, 'groups': {id: 数}}。"""
+        """{'all': 全部生词数, 'groups': {id: 数}}。"""
         return self._db.wordbook_stats()

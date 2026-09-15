@@ -1296,9 +1296,16 @@ class MainWindow(QMainWindow):
         """生词本窗口打开时默认定位到的分组（持久化在配置里）。"""
         try:
             saved = int(self._config["wordbook_group_id"])
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, KeyError):
             saved = DEFAULT_GROUP_ID
-        return saved if saved > 0 else DEFAULT_GROUP_ID
+        if saved <= 0:
+            return DEFAULT_GROUP_ID
+        # 分组可能已被删除，而配置里的旧 id 不会自动清理：
+        # 直接拿它去查词会得到空列表（左栏却仍显示「全部（N）」，看着像 bug）。
+        # 所以这里校验它确实存在，失效就回退到默认分组。
+        if any(g.id == saved for g in self.wordbook.groups()):
+            return saved
+        return DEFAULT_GROUP_ID
 
     def _create_group(self):
         name, ok = QInputDialog.getText(self, "新建分组", "分组名称：")

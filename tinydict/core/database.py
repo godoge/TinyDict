@@ -19,7 +19,7 @@ import sqlite3
 import threading
 from dataclasses import dataclass
 from datetime import datetime
-from typing import List, Sequence
+from typing import List, Sequence, Tuple
 
 
 @dataclass
@@ -43,10 +43,15 @@ class WordGroup:
     count: int = 0
 
 
-# 生词本分组相关的哨兵值（group_id 列只使用正整数，故用 0 / -1 表达虚拟分组）
+# 生词本分组相关的哨兵值（group_id 列只使用正整数，故用 -1 表达虚拟分组）
 DEFAULT_GROUP_ID = 1   # 默认分组：随库创建，可重命名、不可删除
 ALL_GROUPS = -1        # 虚拟分组：全部生词
-UNGROUPED = 0          # 虚拟分组：未归入任何分组的生词
+
+# 不变量：**每个生词必须至少属于一个分组**，不存在「未分组」这种状态。
+# 删除分组、把词移出最后一个分组、清空分组等操作之后，若某个词不再属于任何
+# 分组，统一由 _ensure_has_group / _rehome_orphans 兜底归入默认分组；
+# 唯一的例外是「从默认分组移出 / 清空默认分组」——此时它无处可去，
+# 视为从生词本中移除（否则会立刻被塞回默认分组，等于操作无效）。
 
 _DEFAULT_GROUP_NAME = "默认分组"
 
@@ -138,15 +143,46 @@ class Database:
             )
         version = c.execute("PRAGMA user_version").fetchone()[0] or 0
         if version < 1:
+            self._rehome_orphans(c, now)
+            c.execute("PRAGMA user_version=1")
+        if version < 2:
+            # v2：取消「未分组」——历史上因删除分组而遗留的孤儿词全部归入
+            # 默认分组。同样只能执行一次（user_version 兜底），否则用户后来
+            # 移出默认分组的词会在下次启动时被重新塞回去。
+            self._rehome_orphans(c, now)
+            c.execute("PRAGMA user_version=2")
+        c.commit()
+
+    @staticmethod
+    def _rehome_orphans(c, now: str) -> int:
+        """把「不属于任何分组」的生词归入默认分组，返回新增的关联条数。"""
+        cur = c.execute(
+            "INSERT OR IGNORE INTO wordbook_tags(word, group_id, added_at)"
+            " SELECT w.word, ?, COALESCE(w.added_at, ?) FROM wordbook w"
+            " WHERE NOT EXISTS("
+            "SELECT 1 FROM wordbook_tags t WHERE t.word=w.word)",
+            (DEFAULT_GROUP_ID, now))
+        return cur.rowcount or 0
+
+    @staticmethod
+    def _ensure_has_group(c, word: str, removed_group_id: int):
+        """保证 word 至少属于一个分组（在「移出分组」之后调用）。
+
+        移出普通分组 → 归入默认分组；从默认分组移出 → 彻底删除该生词。
+        """
+        row = c.execute(
+            "SELECT 1 FROM wordbook_tags WHERE word=? LIMIT 1", (word,)
+        ).fetchone()
+        if row is not None:
+            return
+        if removed_group_id == DEFAULT_GROUP_ID:
+            c.execute("DELETE FROM wordbook WHERE word=?", (word,))
+        else:
             c.execute(
                 "INSERT OR IGNORE INTO wordbook_tags(word, group_id, added_at)"
-                " SELECT w.word, ?, COALESCE(w.added_at, ?) FROM wordbook w"
-                " WHERE NOT EXISTS("
-                "SELECT 1 FROM wordbook_tags t WHERE t.word=w.word)",
-                (DEFAULT_GROUP_ID, now),
-            )
-            c.execute("PRAGMA user_version=1")
-        c.commit()
+                " VALUES(?,?,?)",
+                (word, DEFAULT_GROUP_ID,
+                 datetime.now().isoformat(timespec="seconds")))
 
     # ------------------------------------------------------------------ 词库
     def list_dicts(self) -> List[DictInfo]:
@@ -278,7 +314,8 @@ class Database:
     def group_remove(self, group_id: int, with_words: bool = False) -> int:
         """删除分组，返回受影响的生词条数。
 
-        with_words=False：仅解除分组关联，生词保留（只属于本分组的词变为「未分组」）；
+        with_words=False：仅删除分组，生词保留——只属于本分组的词会自动
+                         归入默认分组（不允许出现「未分组」的生词）；
         with_words=True ：同时把这些生词从生词本彻底删除（含其在其它分组的关联）。
         """
         c = self.conn()
@@ -291,6 +328,7 @@ class Database:
                 c.execute("DELETE FROM wordbook WHERE word=?", (w,))
         else:
             c.execute("DELETE FROM wordbook_tags WHERE group_id=?", (group_id,))
+            self._rehome_orphans(c, datetime.now().isoformat(timespec="seconds"))
         c.execute("DELETE FROM wordbook_groups WHERE id=?", (group_id,))
         c.commit()
         return len(words)
@@ -350,11 +388,19 @@ class Database:
         return cur.rowcount > 0
 
     def wordbook_remove_from_group(self, word: str, group_id: int) -> bool:
-        """只把生词移出指定分组；生词本体保留（无分组后归入「未分组」）。"""
-        cur = self.conn().execute(
+        """把生词移出指定分组。
+
+        移出后若它不再属于任何分组：从普通分组移出则自动归入默认分组；
+        从默认分组移出则彻底删除（否则会被立刻塞回默认分组，等于没删）。
+        """
+        word = (word or "").strip()
+        c = self.conn()
+        cur = c.execute(
             "DELETE FROM wordbook_tags WHERE word=? AND group_id=?",
             (word, group_id))
-        self.conn().commit()
+        if cur.rowcount:
+            self._ensure_has_group(c, word, group_id)
+        c.commit()
         return cur.rowcount > 0
 
     def wordbook_remove_words_from_group(self, words: Sequence[str],
@@ -368,21 +414,31 @@ class Database:
             cur = c.execute(
                 "DELETE FROM wordbook_tags WHERE word=? AND group_id=?",
                 (word, group_id))
-            removed += cur.rowcount
+            if cur.rowcount:
+                removed += cur.rowcount
+                self._ensure_has_group(c, word, group_id)
         c.commit()
         return removed
 
     def wordbook_clear(self, group_id: int = ALL_GROUPS):
-        """清空：默认清空整个生词本；指定分组时只清空该分组。"""
+        """清空：默认清空整个生词本；指定分组时只清空该分组。
+
+        清空某个分组后，只属于它的词自动归入默认分组；
+        清空默认分组时，只属于默认分组的词会被彻底删除。
+        """
         c = self.conn()
-        if group_id == ALL_GROUPS:
+        if group_id == ALL_GROUPS or group_id <= 0:
             c.execute("DELETE FROM wordbook_tags")
             c.execute("DELETE FROM wordbook")
-        elif group_id == UNGROUPED:
-            c.execute("DELETE FROM wordbook WHERE NOT EXISTS("
-                      "SELECT 1 FROM wordbook_tags t WHERE t.word=wordbook.word)")
         else:
             c.execute("DELETE FROM wordbook_tags WHERE group_id=?", (group_id,))
+            if group_id == DEFAULT_GROUP_ID:
+                c.execute("DELETE FROM wordbook WHERE NOT EXISTS("
+                          "SELECT 1 FROM wordbook_tags t"
+                          " WHERE t.word=wordbook.word)")
+            else:
+                self._rehome_orphans(
+                    c, datetime.now().isoformat(timespec="seconds"))
         c.commit()
 
     def wordbook_has(self, word: str, group_id: int = None) -> bool:
@@ -412,21 +468,15 @@ class Database:
     def wordbook_list(self, group_id: int = ALL_GROUPS) -> List[tuple]:
         """返回 [(word, added_at)]，按加入时间倒序。
 
-        group_id: ALL_GROUPS(-1) 全部 / UNGROUPED(0) 未分组 / 正整数 指定分组。
+        group_id: ALL_GROUPS(-1) 为全部；正整数为指定分组（0 及非法值按全部处理）。
         """
         # added_at 只精确到秒，同一秒内加入的词用 rowid 兜底，
         # 保证「最新加入排最前」稳定成立（否则同秒词的顺序由存储布局决定）。
         c = self.conn()
-        if group_id == ALL_GROUPS:
+        if group_id == ALL_GROUPS or group_id <= 0:
             rows = c.execute(
                 "SELECT word, added_at FROM wordbook"
                 " ORDER BY added_at DESC, rowid DESC"
-            ).fetchall()
-        elif group_id == UNGROUPED:
-            rows = c.execute(
-                "SELECT word, added_at FROM wordbook w WHERE NOT EXISTS("
-                "SELECT 1 FROM wordbook_tags t WHERE t.word=w.word)"
-                " ORDER BY w.added_at DESC, w.rowid DESC"
             ).fetchall()
         else:
             rows = c.execute(
@@ -435,19 +485,34 @@ class Database:
             ).fetchall()
         return [(r[0], r[1] or "") for r in rows]
 
+    def wordbook_export(
+            self, group_id: int = ALL_GROUPS) -> List[Tuple[str, str, List[str]]]:
+        """导出用：[(word, added_at, [所属分组名…])]，顺序同 wordbook_list。
+
+        分组归属用一条查询一次性取回后在内存里拼装，避免逐词查库
+        （生词上千时逐词查询会明显变慢）。
+        """
+        rows = self.wordbook_list(group_id)
+        if not rows:
+            return []
+        tagged = self.conn().execute(
+            "SELECT t.word, g.name FROM wordbook_tags t"
+            " JOIN wordbook_groups g ON g.id=t.group_id"
+            " ORDER BY g.sort_order, g.id"
+        ).fetchall()
+        by_word: dict = {}
+        for word, name in tagged:
+            by_word.setdefault(word, []).append(name)
+        return [(w, a, by_word.get(w, [])) for w, a in rows]
+
     def wordbook_stats(self) -> dict:
-        """一次性取回界面需要的计数：{'all':n, 'ungrouped':n, 'groups':{id:n}}。"""
+        """一次性取回界面需要的计数：{'all':n, 'groups':{id:n}}。"""
         c = self.conn()
         total = c.execute("SELECT COUNT(*) FROM wordbook").fetchone()[0] or 0
-        ungrouped = c.execute(
-            "SELECT COUNT(*) FROM wordbook w WHERE NOT EXISTS("
-            "SELECT 1 FROM wordbook_tags t WHERE t.word=w.word)"
-        ).fetchone()[0] or 0
         rows = c.execute(
             "SELECT group_id, COUNT(*) FROM wordbook_tags GROUP BY group_id"
         ).fetchall()
-        return {"all": total, "ungrouped": ungrouped,
-                "groups": {r[0]: r[1] for r in rows}}
+        return {"all": total, "groups": {r[0]: r[1] for r in rows}}
 
     # -------------------------------------------------------------- 查询历史
     def history_record(self, word: str, limit: int) -> bool:

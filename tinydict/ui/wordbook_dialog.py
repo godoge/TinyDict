@@ -1,21 +1,35 @@
 """生词本窗口：分组管理 + 生词列表（加入分组 / 移除 / 删除 / 双击查词）。
 
-左侧是分组栏（全部 / 未分组 / 各分组，可新建、重命名、删除、排序），
+左侧是分组栏（全部 / 各分组，可新建、重命名、删除、排序），
 右侧是当前分组的生词列表（可多选后批量加入其它分组或从本分组移除）。
 分组为标签式多归属：一个生词可以同时出现在多个分组里。
+
+没有「未分组」：每个生词至少属于一个分组。把词移出最后一个分组、
+删除分组或清空分组时，它会自动归入「默认分组」，不会变成无归属。
 """
+
+import os
+from datetime import datetime
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QAbstractItemView, QDialog, QHBoxLayout, QInputDialog, QLabel, QListWidget,
-    QListWidgetItem, QMenu, QMessageBox, QPushButton, QSplitter, QVBoxLayout,
-    QWidget,
+    QAbstractItemView, QDialog, QFileDialog, QHBoxLayout, QInputDialog, QLabel,
+    QListWidget, QListWidgetItem, QMenu, QMessageBox, QPushButton, QSplitter,
+    QVBoxLayout, QWidget,
 )
 
+from ..core import wordbook_io as _io
 from ..core.wordbook import (
-    ALL_GROUPS, DEFAULT_GROUP_ID, UNGROUPED, WordBook,
+    ALL_GROUPS, DEFAULT_GROUP_ID, WordBook,
 )
 from . import theme as _theme
+
+#: 导出 / 导入的文件类型过滤器。格式由用户在这里选（或由后缀推断）。
+_EXPORT_FILTER = ("CSV 表格（含分组与时间） (*.csv);;"
+                  "纯文本（每行一个词） (*.txt);;"
+                  "JSON 完整备份（含分组结构） (*.json)")
+_IMPORT_FILTER = ("生词文件 (*.txt *.csv *.json);;CSV 表格 (*.csv);;"
+                  "纯文本 (*.txt);;JSON 备份 (*.json);;所有文件 (*.*)")
 
 
 class WordbookDialog(QDialog):
@@ -129,6 +143,8 @@ class WordbookDialog(QDialog):
         self._btn_add_to.clicked.connect(self._add_to_group)
         btns.addWidget(self._btn_add_to)
         self._btn_remove_from = QPushButton("从本分组移除")
+        self._btn_remove_from.setToolTip(
+            "把选中的生词移出当前分组；只属于本分组的词会自动归入「默认分组」")
         self._btn_remove_from.clicked.connect(self._remove_from_group)
         btns.addWidget(self._btn_remove_from)
         self._btn_delete = QPushButton("彻底删除")
@@ -137,7 +153,17 @@ class WordbookDialog(QDialog):
         self._btn_clear = QPushButton("清空本分组")
         self._btn_clear.clicked.connect(self._clear_group)
         btns.addWidget(self._btn_clear)
+        # 导入 / 导出是「文件级」操作，和左边的增删分开、靠右放
         btns.addStretch(1)
+        self._btn_import = QPushButton("导入…")
+        self._btn_import.setToolTip("从 txt / csv 导入生词，或从 json 备份恢复")
+        self._btn_import.clicked.connect(self._import_words)
+        btns.addWidget(self._btn_import)
+        self._btn_export = QPushButton("导出…")
+        self._btn_export.setToolTip(
+            "导出当前分组的生词；选 json 则导出含分组结构的完整备份")
+        self._btn_export.clicked.connect(self._export_words)
+        btns.addWidget(self._btn_export)
         self._btn_close = QPushButton("关闭")
         self._btn_close.clicked.connect(self.close)
         btns.addWidget(self._btn_close)
@@ -151,10 +177,15 @@ class WordbookDialog(QDialog):
         self._group_list.blockSignals(True)
         self._group_list.clear()
         self._add_group_item(f"全部（{stats['all']}）", ALL_GROUPS)
-        self._add_group_item(f"未分组（{stats['ungrouped']}）", UNGROUPED)
         for g in self._wordbook.groups():
             self._add_group_item(f"{g.name}（{counts.get(g.id, 0)}）", g.id)
+        # 分组可能已经不存在（例如配置里还留着被删掉的分组 id）：
+        # 这时必须回退到「全部」，否则会出现「左栏高亮『全部（N）』、
+        # 右侧却按失效 id 查词而一片空白」，要手点一下分组才恢复。
         row = self._row_of_group(self._current_group)
+        if row < 0:
+            self._current_group = ALL_GROUPS
+            row = self._row_of_group(ALL_GROUPS)
         self._group_list.setCurrentRow(max(row, 0))
         self._group_list.blockSignals(False)
 
@@ -174,7 +205,7 @@ class WordbookDialog(QDialog):
     def _add_group_item(self, text: str, group_id: int):
         item = QListWidgetItem(text)
         item.setData(Qt.ItemDataRole.UserRole, group_id)
-        if group_id in (ALL_GROUPS, UNGROUPED):
+        if group_id == ALL_GROUPS:
             font = item.font()
             font.setBold(True)
             item.setFont(font)
@@ -182,10 +213,11 @@ class WordbookDialog(QDialog):
         self._group_list.addItem(item)
 
     def _row_of_group(self, group_id: int) -> int:
+        """返回该分组在左栏的行号；不存在时返回 -1（调用方负责回退）。"""
         for i in range(self._group_list.count()):
             if self._group_list.item(i).data(Qt.ItemDataRole.UserRole) == group_id:
                 return i
-        return 0
+        return -1
 
     def _refresh_words(self):
         words = self._wordbook.words(self._current_group)
@@ -283,7 +315,7 @@ class WordbookDialog(QDialog):
         box.setText(f"确定删除分组「{name}」？")
         box.setInformativeText(
             "「仅删除分组」：分组内的生词继续保留在生词本中"
-            "（只属于本分组的词会归入「未分组」）。\n"
+            "（只属于本分组的词会自动归入「默认分组」）。\n"
             "「同时删除生词」：这些生词将从生词本彻底移除"
             "（包括它们在其它分组中的记录）。")
         btn_keep = box.addButton("仅删除分组", QMessageBox.ButtonRole.AcceptRole)
@@ -439,11 +471,13 @@ class WordbookDialog(QDialog):
         if gid == ALL_GROUPS:
             text = ("确定清空整个生词本？\n"
                     "所有生词及其分组关联都会被删除，不可撤销。")
-        elif gid == UNGROUPED:
-            text = "确定清空「未分组」中的生词？"
+        elif gid == DEFAULT_GROUP_ID:
+            text = (f"确定清空分组「{name}」？\n"
+                    "只属于本分组的生词会被彻底删除"
+                    "（同时也在其它分组的词会保留在那些分组里）。")
         else:
             text = (f"确定清空分组「{name}」？\n"
-                    "生词本体保留；只属于本分组的词会归入「未分组」。")
+                    "只属于本分组的生词会自动归入「默认分组」，不会丢失。")
         btn = QMessageBox.question(
             self, "清空", text,
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
@@ -453,6 +487,155 @@ class WordbookDialog(QDialog):
             return
         self._wordbook.clear(gid)
         self._note = f"已清空「{name}」"
+        self.refresh()
+        self.groupsChanged.emit()
+        self.wordsChanged.emit()
+
+    # ------------------------------------------------------------ 导入 / 导出
+    @staticmethod
+    def _write_text(path: str, text: str, encoding: str):
+        with open(path, "w", encoding=encoding, newline="") as f:
+            f.write(text)
+
+    @staticmethod
+    def _ext_from_filter(selected: str) -> str:
+        """文件名没写后缀时，按用户在对话框里选的过滤器判断格式。"""
+        for ext in ("csv", "txt", "json"):
+            if f"*.{ext}" in (selected or ""):
+                return ext
+        return ""
+
+    @staticmethod
+    def _safe_name(name: str) -> str:
+        """去掉文件名里不能用的字符（分组名是用户随便起的）。"""
+        for ch in '\\/:*?"<>|':
+            name = name.replace(ch, "_")
+        return name.strip() or "生词本"
+
+    def _export_words(self):
+        rows = self._wordbook.export_rows(self._current_group)
+        if not rows:
+            QMessageBox.information(self, "导出", "当前分组没有可导出的生词。")
+            return
+
+        stamp = datetime.now().strftime("%Y%m%d")
+        group = self._safe_name(self._current_group_name())
+        default = f"TinyDict-{group}-{stamp}.csv"
+        path, chosen = QFileDialog.getSaveFileName(
+            self, "导出生词本", default, _EXPORT_FILTER)
+        if not path:
+            return
+
+        ext = _io.ext_of(path) or self._ext_from_filter(chosen) or "csv"
+        if _io.ext_of(path) != ext:
+            path = f"{path}.{ext}"
+
+        try:
+            if ext == "txt":
+                self._write_text(path, _io.dump_txt(rows), "utf-8")
+            elif ext == "csv":
+                # utf-8-sig：带 BOM，Excel 双击打开不乱码
+                self._write_text(path, _io.dump_csv(rows), "utf-8-sig")
+            else:
+                # 备份不看当前分组，始终导出全部分组与归属
+                all_rows = self._wordbook.export_rows(ALL_GROUPS)
+                groups = [g.name for g in self._wordbook.groups()]
+                self._write_text(
+                    path,
+                    _io.dump_json(all_rows, groups,
+                                  datetime.now().isoformat(timespec="seconds")),
+                    "utf-8")
+                rows = all_rows
+        except OSError as e:
+            QMessageBox.warning(self, "导出失败", f"写入文件失败：\n{e}")
+            return
+
+        self._note = f"已导出 {len(rows)} 个生词到 {os.path.basename(path)}"
+        self._refresh_words()
+
+    def _import_words(self):
+        path, _chosen = QFileDialog.getOpenFileName(
+            self, "导入生词", "", _IMPORT_FILTER)
+        if not path:
+            return
+        try:
+            # utf-8-sig：兼容 Excel 导出的带 BOM 的 CSV
+            with open(path, "r", encoding="utf-8-sig", errors="replace") as f:
+                text = f.read()
+        except OSError as e:
+            QMessageBox.warning(self, "导入失败", f"读取文件失败：\n{e}")
+            return
+
+        if _io.ext_of(path) == "json":
+            self._import_backup(text)
+            return
+
+        words = _io.parse_words(text)
+        if not words:
+            QMessageBox.information(
+                self, "导入",
+                f"没有从「{os.path.basename(path)}」读到生词。\n"
+                "纯文本 / CSV 里每行写一个词即可（CSV 取第一列）。")
+            return
+        self._import_plain(words, os.path.basename(path))
+
+    def _import_plain(self, words: list, filename: str):
+        """把读到的词表导入用户指定的分组（分组由弹出的菜单选择）。"""
+        menu = QMenu(self)
+        actions = {}
+        for g in self._wordbook.groups():
+            actions[menu.addAction(g.name)] = g.id
+        menu.addSeparator()
+        act_new = menu.addAction("新建分组…")
+        chosen = menu.exec(self._btn_import.mapToGlobal(
+            self._btn_import.rect().bottomLeft()))
+        if chosen is None:
+            return
+
+        if chosen is act_new:
+            name, ok = QInputDialog.getText(self, "新建分组", "分组名称：")
+            if not ok or not (name or "").strip():
+                return
+            g = self._wordbook.add_group((name or "").strip())
+            if g is None:
+                QMessageBox.warning(
+                    self, "新建分组", f"分组「{(name or '').strip()}」已存在。")
+                return
+            gid, gname = g.id, g.name
+            self.groupsChanged.emit()
+        else:
+            gid, gname = actions[chosen], chosen.text()
+
+        added = self._wordbook.add_words(words, gid)
+        dup = len(words) - added
+        self._note = (f"已从 {filename} 导入 {added} 个生词到「{gname}」"
+                      + (f"（{dup} 个已在其中）" if dup else ""))
+        self.refresh()
+        self.groupsChanged.emit()
+        self.wordsChanged.emit()
+
+    def _import_backup(self, text: str):
+        try:
+            payload = _io.parse_backup(text)
+        except ValueError as e:
+            QMessageBox.warning(self, "导入失败", str(e))
+            return
+        words = payload["words"]
+        if not words:
+            QMessageBox.information(self, "导入", "备份文件里没有生词。")
+            return
+        btn = QMessageBox.question(
+            self, "导入备份",
+            f"备份包含 {len(words)} 个生词、{len(payload['groups'])} 个分组。\n"
+            "将合并到现有生词本：缺少的分组自动新建，重复的词跳过。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes)
+        if btn != QMessageBox.StandardButton.Yes:
+            return
+
+        stat = self._wordbook.restore(payload)
+        self._note = (f"已导入备份：新增 {stat['words']} 个生词、"
+                      f"{stat['tags']} 条分组归属、{stat['groups']} 个分组")
         self.refresh()
         self.groupsChanged.emit()
         self.wordsChanged.emit()
