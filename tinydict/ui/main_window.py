@@ -424,9 +424,9 @@ def welcome_page(theme_mode: str = "light") -> str:
 <li>点击右上角<b>「词库」</b>添加 <code>.mdx</code> 文件，或直接选择
 <b>词库文件夹</b>（自动扫描其中全部词库）—— 即加即用，无需导入</li>
 <li>在上方搜索框输入单词，回车查词，左侧列表为实时联想</li>
-<li>点 <b>★</b> 把当前词条收藏到右侧选中的<b>生词本分组</b>，
+<li>点 <b>★</b> 弹出菜单，勾选要把当前词条加入的<b>生词本分组</b>（可同时加入多个），
 点<b>「生词本」</b>按分组查看与整理（一个词可同时属于多个分组）</li>
-<li><b>「置顶」</b>可让窗口常驻最前；关闭窗口默认最小化到系统托盘</li>
+<li><b>「置顶窗口」</b>可让窗口常驻最前；关闭窗口默认最小化到系统托盘</li>
 <li>默认全局快捷键：<code>Ctrl+Alt+D</code> 显示/隐藏窗口，
 <code>Ctrl+Alt+Q</code> 屏幕划词取词（可在设置中修改）</li>
 </ul>
@@ -683,7 +683,7 @@ class MainWindow(QMainWindow):
         # （必须在 _build_ui 之后，那时 splitter 才存在）
         self._restore_window_state()
         QGuiApplication.instance().aboutToQuit.connect(self._save_window_state)
-        # 顶栏分组下拉框（★ 的归属分组）；生词变化时同步刷新计数
+        # 顶栏 ★（收藏）初始状态 + 生词变化时同步刷新
         self._reload_groups()
         self.wordbook_changed.connect(self._reload_groups)
         self._view.setHtml(welcome_page(self._current_theme_mode()), QUrl("mdx://0/"))
@@ -771,7 +771,7 @@ class MainWindow(QMainWindow):
                 welcome_page(new_mode), QUrl("mdx://0/"))
 
     def _refresh_nav_icons(self):
-        """给顶栏导航按钮重画图标，描边色取当前主题的文字色。
+        """给顶栏导航按钮 / 「更多」下拉重画图标，描边色取当前主题的文字色。
 
         导航图标是用 QPainter 现画的位图，不像 QSS 里的 color 会随主题自动变，
         所以换肤时必须重画一次，否则浅色主题下会残留深灰图标、几乎看不见。
@@ -780,10 +780,21 @@ class MainWindow(QMainWindow):
         if not getattr(self, "_nav_buttons", None):
             return  # _build_ui 之前被调用时直接跳过（理论上不会发生）
         color = QColor(_theme.toolbutton_fg(self._current_theme_mode()))
-        icon_size = QSize(18, 18)
+        icon_size = QSize(15, 15)
         for btn, kind in self._nav_buttons:
             btn.setIcon(nav_icon(kind, color))
             btn.setIconSize(icon_size)
+        # 「更多」下拉按钮本身 + 菜单里的三项动作都要重画（同样不随主题自动变）
+        if getattr(self, "_more_btn", None) is not None:
+            self._more_btn.setIcon(nav_icon("menu", color))
+            self._more_btn.setIconSize(icon_size)
+        if getattr(self, "_more_menu", None) is not None:
+            for act, kind in (
+                (self._act_pin, "pin"),
+                (self._act_settings, "settings"),
+                (self._act_about, "about"),
+            ):
+                act.setIcon(nav_icon(kind, color))
 
     # ---------------------------------------------------------------- UI
     def _build_ui(self):
@@ -792,7 +803,9 @@ class MainWindow(QMainWindow):
         root.setContentsMargins(10, 8, 10, 6)
         root.setSpacing(6)
 
-        # ---- 顶栏
+        # ---- 顶栏（按钮横向并排，整体靠左、紧贴左右箭头）
+        # 后退 / 前进 / 收藏 / 词库 / 生词本 / 历史 / 更多 一字排开地放在窗口
+        # 左上角、紧挨着左右箭头；末尾用弹性空白把剩余空间顶到右边，按钮不会往右散开。
         top = QHBoxLayout()
         top.setSpacing(4)
 
@@ -804,6 +817,16 @@ class MainWindow(QMainWindow):
         self._btn_fwd.clicked.connect(self._go_forward)
         top.addWidget(self._btn_back)
         top.addWidget(self._btn_fwd)
+
+        # 导航（后退 / 前进）与功能按钮之间用一条竖分隔线，把「浏览导航」和
+        # 「功能工具栏」两组在视觉上分开。用 QFrame 竖线而非「|」文字：它会随
+        # 主题换色、与按钮垂直居中对齐，比字符更整齐。objectName 对应主题里的
+        # QFrame#nav_sep 样式（浅/深两套）。
+        self._nav_sep = QFrame(objectName="nav_sep")
+        self._nav_sep.setFrameShape(QFrame.Shape.VLine)
+        self._nav_sep.setLineWidth(0)
+        self._nav_sep.setMidLineWidth(0)
+        top.addWidget(self._nav_sep)
 
         # 搜索框移到左侧候选词列表上方（见下方 left_panel），顶栏不再单独
         # 占一行那么宽的位置；完整提示挪到 tooltip，窄框里只留短占位文。
@@ -817,46 +840,68 @@ class MainWindow(QMainWindow):
         # 方向键在候选列表里上下移动选择（否则只能拿鼠标点）
         self.search_edit.installEventFilter(self)
 
-        # 顶栏去掉搜索框后，左端放导航、右端放功能按钮，中间弹性撑开
-        top.addStretch(1)
-
-        self._btn_star = QToolButton(text="☆", checkable=True)
-        self._btn_star.setToolTip("加入/移出当前分组")
-        self._btn_star.clicked.connect(self._on_star)
+        # 收藏：单个 ★ 按钮（没查词时隐藏，查词后才出现）。
+        # 点 ★ 弹出下拉，列出所有生词本分组并勾选当前词所属分组；
+        # 勾选 / 取消即把当前词加入 / 移出对应分组。原「分组下拉框」已并入这里。
+        self._btn_star = QToolButton(text="☆")
+        self._btn_star.setToolTip("点 ★ 选择加入 / 移出哪些生词本分组")
+        self._btn_star.setVisible(False)   # 启动无当前词，先藏起来
+        self._star_menu = QMenu(self._btn_star)
+        self._btn_star.setMenu(self._star_menu)
+        self._btn_star.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self._star_menu.aboutToShow.connect(self._build_star_menu)
         top.addWidget(self._btn_star)
 
-        # 生词本分组选择：★ 收录的词进入这里选中的分组
-        self.group_combo = QComboBox(objectName="group_combo")
-        self.group_combo.setToolTip("点 ★ 时把当前词条加入的分组")
-        self.group_combo.setSizeAdjustPolicy(
-            QComboBox.SizeAdjustPolicy.AdjustToContents)
-        self.group_combo.setMaximumWidth(180)
-        self.group_combo.currentIndexChanged.connect(self._on_group_combo_changed)
-        top.addWidget(self.group_combo)
-
-        # 顶栏功能按钮：图标 + 文字。统一用这张表创建，避免六处按钮各写一段、
-        # 加图标时漏掉某个；kind 对应 icons.nav_icon 支持的图形。
-        # 图标是运行时画的，浅/深主题下颜色不同，统一由 _refresh_nav_icons 生成。
+        # 词典功能按钮（词库 / 生词本 / 历史）—— 与查词直接相关，各自成独立按钮；
+        # 窗口 / 应用级功能（置顶窗口 / 设置 / 关于）收进「更多」下拉，和词典按钮
+        # 分开。图标是运行时用 QPainter 画的（见 icons.nav_icon），浅/深主题下颜色
+        # 不同，统一在 _refresh_nav_icons 里重画，因此这里只建按钮、挂信号。
         self._nav_buttons = []
-        for kind, text, tip, slot, checkable in (
-            ("pin", "置顶", "窗口常驻最前", self._on_pin, True),
+        for kind, text, tip, slot in (
             ("dict", "词库", "管理 MDX 词库（导入 / 删除 / 优先级）",
-             self.open_dict_manager, False),
-            ("wordbook", "生词本", "查看生词本", self.open_wordbook, False),
-            ("history", "历史", "查看查询历史", self.open_history, False),
-            ("settings", "设置", "快捷键等设置", self.open_settings, False),
-            ("about", "关于", "关于本软件", self.open_about, False),
+             self.open_dict_manager),
+            ("wordbook", "生词本", "查看生词本", self.open_wordbook),
+            ("history", "历史", "查看查询历史", self.open_history),
         ):
-            btn = QToolButton(text=text, checkable=checkable)
+            btn = QToolButton(text=text)
             btn.setToolTip(tip)
-            # 图标与文字并排：原按钮都有文字标签，保留可避免只剩图形时看不懂
+            # 图标与文字并排：保留文字标签，避免只剩图形时看不懂
             btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
             btn.clicked.connect(slot)
             top.addWidget(btn)
             self._nav_buttons.append((btn, kind))
-        # 别的方法会用到这两个句柄，创建方式变了也要保证名字仍指向对应按钮
-        self._btn_pin = self._nav_buttons[0][0]
-        self._btn_about = self._nav_buttons[-1][0]
+
+        # 「更多」下拉：置顶窗口 / 设置 / 关于。
+        # 置顶窗口 是可勾选的动作（对应原先的 checkable 按钮），勾选即常驻最前；
+        # 设置 / 关于 打开对应对话框。InstantPopup：点击按钮立刻弹出菜单。
+        more = QToolButton(text="更多")
+        more.setToolTip("置顶窗口、设置、关于")
+        more.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        more.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        more_menu = QMenu(more)
+        more.setMenu(more_menu)
+
+        act_pin = more_menu.addAction("置顶窗口")
+        act_pin.setCheckable(True)
+        act_pin.setToolTip("窗口常驻最前")
+        act_pin.triggered.connect(self._on_pin)
+        more_menu.addSeparator()
+        act_settings = more_menu.addAction("设置")
+        act_settings.setToolTip("快捷键等设置")
+        act_settings.triggered.connect(self.open_settings)
+        act_about = more_menu.addAction("关于")
+        act_about.setToolTip("关于本软件")
+        act_about.triggered.connect(self.open_about)
+
+        top.addWidget(more)
+        # 末尾弹性空白：把上面一整排按钮顶到左边、紧贴左右箭头，不往右散开
+        top.addStretch(1)
+        # 供 _refresh_nav_icons 重画图标，以及将来需要改下拉内容时定位
+        self._more_btn = more
+        self._more_menu = more_menu
+        self._act_pin = act_pin
+        self._act_settings = act_settings
+        self._act_about = act_about
         self._refresh_nav_icons()
         root.addLayout(top)
 
@@ -1244,55 +1289,21 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------ 生词本分组
     def _reload_groups(self):
-        """重建顶栏分组下拉框（保持当前选中的分组）。"""
-        gid = self._selected_group_id()
-        self.group_combo.blockSignals(True)
-        self.group_combo.clear()
-        index = 0
-        for i, g in enumerate(self.wordbook.groups()):
-            self.group_combo.addItem(f"{g.name}（{g.count}）", g.id)
-            # 分组名单独存一份，避免从带计数的显示文本里反解
-            self.group_combo.setItemData(i, g.name, Qt.ItemDataRole.ToolTipRole)
-            if g.id == gid:
-                index = i
-        self.group_combo.addItem("＋ 新建分组…", -1)
-        self.group_combo.setCurrentIndex(index)
-        self.group_combo.blockSignals(False)
+        """生词本分组 / 生词变化时刷新顶栏 ★（下拉菜单在打开时按需重建）。"""
         self._update_star()
 
     def _selected_group_id(self) -> int:
-        """当前选中的分组 id；未选中（如停在「新建分组…」）时回退到配置值。"""
-        gid = self.group_combo.currentData()
-        if isinstance(gid, int) and gid > 0:
-            return gid
+        """生词本窗口打开时默认定位到的分组（持久化在配置里）。"""
         try:
             saved = int(self._config["wordbook_group_id"])
         except (TypeError, ValueError):
             saved = DEFAULT_GROUP_ID
         return saved if saved > 0 else DEFAULT_GROUP_ID
 
-    def _selected_group_name(self) -> str:
-        idx = self.group_combo.currentIndex()
-        name = self.group_combo.itemData(idx, Qt.ItemDataRole.ToolTipRole)
-        if name:
-            return str(name)
-        # 停在「＋ 新建分组…」等非常规项时，按实际选中的分组 id 反查名字
-        return self.wordbook.group_name(self._selected_group_id()) or "生词本"
-
-    def _on_group_combo_changed(self, index: int):
-        gid = self.group_combo.itemData(index)
-        if gid == -1:                     # 「＋ 新建分组…」
-            self._create_group()
-            return
-        if isinstance(gid, int) and gid > 0:
-            self._config["wordbook_group_id"] = gid
-            self._config.save()
-        self._update_star()
-
     def _create_group(self):
         name, ok = QInputDialog.getText(self, "新建分组", "分组名称：")
         if not ok or not (name or "").strip():
-            self._reload_groups()          # 取消：回到之前选中的分组
+            self._reload_groups()          # 取消：保持现状
             return
         name = name.strip()
         group = self.wordbook.add_group(name)
@@ -1308,31 +1319,46 @@ class MainWindow(QMainWindow):
 
     # ---------------------------------------------------------------- 生词
     def _update_star(self):
-        gid = self._selected_group_id()
-        gname = self._selected_group_name()
-        self._btn_star.blockSignals(True)
-        in_group = bool(self._current_word) and self.wordbook.has(
-            self._current_word, gid)
-        self._btn_star.setChecked(in_group)
-        self._btn_star.setText("★" if in_group else "☆")
-        self._btn_star.blockSignals(False)
-
-        action = f"点 ★ 加入 / 移出分组「{gname}」"
-        if self._current_word:
-            names = self.wordbook.groups_of(self._current_word)
-            self._btn_star.setToolTip(
-                (f"所属分组：{'、'.join(names)}\n" if names else "")
-                + action
-            )
-        else:
-            self._btn_star.setToolTip(action)
-
-    def _on_star(self, checked: bool):
-        if not self._current_word:
+        """★ 是否可见 / 填充：没查词时隐藏；查了词后，★
+        表示当前词已在任一分组里（即已收藏），☆ 表示尚未收藏。"""
+        has_word = bool(self._current_word)
+        self._btn_star.setVisible(has_word)
+        if not has_word:
             return
+        favorited = self.wordbook.has(self._current_word)   # 在任一分组里即为收藏
+        self._btn_star.blockSignals(True)
+        self._btn_star.setText("★" if favorited else "☆")
+        self._btn_star.blockSignals(False)
+        names = self.wordbook.groups_of(self._current_word)
+        self._btn_star.setToolTip(
+            (f"所属分组：{'、'.join(names)}\n" if names else "")
+            + "点 ★ 选择加入 / 移出哪些生词本分组")
+
+    def _build_star_menu(self):
+        """点 ★ 时按需重建下拉：列出所有分组并勾选当前词所属分组。
+        勾选 / 取消即把当前词加入 / 移出对应分组；末尾可新建分组。"""
+        menu = self._star_menu
+        menu.clear()
         word = self._current_word
-        gid = self._selected_group_id()
-        gname = self._selected_group_name()
+        if not word:
+            return
+        for g in self.wordbook.groups():
+            act = menu.addAction(f"{g.name}（{g.count}）")
+            act.setCheckable(True)
+            act.setChecked(self.wordbook.has(word, g.id))
+            gid = g.id
+            act.triggered.connect(
+                lambda checked, gid=gid: self._on_star_group(gid, checked))
+        menu.addSeparator()
+        new_act = menu.addAction("＋ 新建分组…")
+        new_act.triggered.connect(self._create_group)
+
+    def _on_star_group(self, gid: int, checked: bool):
+        """下拉里勾选 / 取消某个分组：把当前词加入 / 移出该分组。"""
+        word = self._current_word
+        if not word:
+            return
+        gname = self.wordbook.group_name(gid) or "生词本"
         if checked:
             if self.wordbook.add(word, gid):
                 self._status_info.setText(f"已加入「{gname}」：{word}")

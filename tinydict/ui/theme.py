@@ -248,6 +248,9 @@ _APP_QSS_LIGHT = """
 QFrame#search_panel{
     border:1px solid #d1d5db;border-radius:8px;background:#fff;
 }
+QFrame#nav_sep{
+    border:0;border-left:1px solid #d1d5db;margin:3px 8px;
+}
 /* 输入框与候选列表同属一张卡片，但用不同底色分成上下两段：
    输入框像"内嵌的填写区"，列表是纯白的结果区，一眼能分清哪里能打字。 */
 QLineEdit#search_edit{
@@ -279,6 +282,9 @@ QComboBox#group_combo::drop-down{border:none;width:16px;}
 _APP_QSS_DARK = """
 QFrame#search_panel{
     border:1px solid #374151;border-radius:8px;background:#1e1e1e;
+}
+QFrame#nav_sep{
+    border:0;border-left:1px solid #374151;margin:3px 8px;
 }
 QLineEdit#search_edit{
     border:none;border-bottom:1px solid #374151;border-radius:7px 7px 0 0;

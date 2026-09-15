@@ -28,11 +28,12 @@ from PySide6.QtGui import (
 #   - 描边颜色由调用方传入，可跟随明 / 暗主题切换（见 theme.toolbutton_fg）。
 # ---------------------------------------------------------------------------
 
-# 线宽占画布边长的比例，六个图标统一，保证视觉重量一致
-_NAV_STROKE = 0.085
+# 线宽占画布边长的比例，六个图标统一，保证视觉重量一致；
+# 0.06 比初版 0.085 更细，小尺寸下不至于显得沉
+_NAV_STROKE = 0.06
 
 #: 支持的导航图标名
-NAV_ICONS = ("pin", "dict", "wordbook", "history", "settings", "about")
+NAV_ICONS = ("pin", "dict", "wordbook", "history", "settings", "about", "menu")
 
 
 def paint_icon(p: QPainter, size: int) -> None:
@@ -254,6 +255,15 @@ def _draw_about(p: QPainter, s: int) -> None:
     p.drawLine(QPointF(cx, cy - r * 0.14), QPointF(cx, cy + r * 0.46))
 
 
+def _draw_menu(p: QPainter, s: int) -> None:
+    """更多：汉堡菜单（三条横线），用在收起置顶 / 设置 / 关于的下拉按钮上。"""
+    x0 = s * 0.20
+    x1 = s * 0.80
+    for fy in (0.30, 0.50, 0.70):
+        y = s * fy
+        p.drawLine(QPointF(x0, y), QPointF(x1, y))
+
+
 _NAV_GLYPHS = {
     "pin": _draw_pin,
     "dict": _draw_dict,
@@ -261,6 +271,7 @@ _NAV_GLYPHS = {
     "history": _draw_history,
     "settings": _draw_settings,
     "about": _draw_about,
+    "menu": _draw_menu,
 }
 
 
