@@ -5,6 +5,7 @@ from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from . import __version__
 from .config import Config
+from .i18n import _, set_language
 from .core.database import Database
 from .core.history import HistoryBook
 from .core.query import DictionaryService
@@ -27,19 +28,19 @@ class TrayController(QObject):
         self._tray.setToolTip(f"TinyDict v{__version__}")
 
         menu = QMenu()
-        act_toggle = menu.addAction("显示 / 隐藏主窗口")
+        act_toggle = menu.addAction(_("显示 / 隐藏主窗口"))
         act_toggle.triggered.connect(app.toggle_window)
-        act_dicts = menu.addAction("词库管理…")
+        act_dicts = menu.addAction(_("词库管理…"))
         act_dicts.triggered.connect(app.window.open_dict_manager)
-        act_wb = menu.addAction("生词本…")
+        act_wb = menu.addAction(_("生词本…"))
         act_wb.triggered.connect(app.window.open_wordbook)
-        act_history = menu.addAction("查询历史…")
+        act_history = menu.addAction(_("查询历史…"))
         act_history.triggered.connect(app.window.open_history)
         menu.addSeparator()
-        act_about = menu.addAction("关于 TinyDict…")
+        act_about = menu.addAction(_("关于 TinyDict…"))
         act_about.triggered.connect(app.window.open_about)
         menu.addSeparator()
-        act_exit = menu.addAction("退出")
+        act_exit = menu.addAction(_("退出"))
         act_exit.triggered.connect(app.quit_app)
         self._tray.setContextMenu(menu)
 
@@ -55,7 +56,7 @@ class TrayController(QObject):
                                 QSystemTrayIcon.MessageIcon.Information, 4000)
 
     def notify_minimized(self):
-        self.notify("已最小化到系统托盘，右键托盘图标可选择退出。")
+        self.notify(_("已最小化到系统托盘，右键托盘图标可选择退出。"))
 
     def hide_icon(self):
         """隐藏托盘图标。
@@ -89,6 +90,10 @@ class TinyDictApp:
         self.wordbook = WordBook(self.db)
         self.history = HistoryBook(self.db)
 
+        # 界面语言：按配置初始化（默认中文）。切换语言后会重启进程重新走到这里。
+        # 必须在 self.config 赋值之后调用。
+        set_language(self.config["language"])
+
         # 主题管理器：根据 Config 初始化主题并应用到整个 QApplication
         self.theme_manager = ThemeManager(self.config, qapp)
         self.theme_manager.apply_to_qt()
@@ -119,9 +124,9 @@ class TinyDictApp:
         self.capture.captured.connect(self.window.bring_up_and_lookup)
         self.capture.failed.connect(
             lambda: self.window.notify(
-                "划词取词：没读到选中的文字。\n"
-                "请先在其他程序中选中文字再按快捷键；"
-                "少数程序不支持复制，可试试用鼠标右键复制。"))
+                _("划词取词：没读到选中的文字。\n"
+                  "请先在其他程序中选中文字再按快捷键；"
+                  "少数程序不支持复制，可试试用鼠标右键复制。")))
         self.window.settings_saved.connect(self._on_settings_saved)
         self.qapp.aboutToQuit.connect(self._shutdown)
 

@@ -22,6 +22,7 @@ from ..core import wordbook_io as _io
 from ..core.wordbook import (
     ALL_GROUPS, DEFAULT_GROUP_ID, WordBook,
 )
+from ..i18n import _
 from . import theme as _theme
 
 #: 导出 / 导入的文件类型过滤器。格式由用户在这里选（或由后缀推断）。
@@ -30,6 +31,9 @@ _EXPORT_FILTER = ("CSV 表格（含分组与时间） (*.csv);;"
                   "JSON 完整备份（含分组结构） (*.json)")
 _IMPORT_FILTER = ("生词文件 (*.txt *.csv *.json);;CSV 表格 (*.csv);;"
                   "纯文本 (*.txt);;JSON 备份 (*.json);;所有文件 (*.*)")
+
+#: 分组项的「名称」（不带计数后缀）存在 UserRole+1，便于跨语言正确取分组名。
+_NAME_ROLE = Qt.ItemDataRole.UserRole + 1
 
 
 class WordbookDialog(QDialog):
@@ -46,7 +50,7 @@ class WordbookDialog(QDialog):
         self._current_group = ALL_GROUPS
         self._note = ""           # 操作反馈（显示在计数行末尾，切换分组时清空）
 
-        self.setWindowTitle("生词本")
+        self.setWindowTitle(_("生词本"))
         self.resize(780, 540)
         self._apply_qss()
 
@@ -81,7 +85,7 @@ class WordbookDialog(QDialog):
         lv = QVBoxLayout(left)
         lv.setContentsMargins(0, 0, 0, 0)
         lv.setSpacing(6)
-        lv.addWidget(QLabel("分组", objectName="wb_title"))
+        lv.addWidget(QLabel(_("分组"), objectName="wb_title"))
 
         self._group_list = QListWidget(objectName="wb_group_list")
         self._group_list.currentItemChanged.connect(self._on_group_changed)
@@ -91,22 +95,22 @@ class WordbookDialog(QDialog):
         lv.addWidget(self._group_list, stretch=1)
 
         row1 = QHBoxLayout()
-        self._btn_new = QPushButton("新建")
+        self._btn_new = QPushButton(_("新建"))
         self._btn_new.clicked.connect(self._new_group)
         row1.addWidget(self._btn_new)
-        self._btn_rename = QPushButton("重命名")
+        self._btn_rename = QPushButton(_("重命名"))
         self._btn_rename.clicked.connect(self._rename_group)
         row1.addWidget(self._btn_rename)
-        self._btn_del = QPushButton("删除")
+        self._btn_del = QPushButton(_("删除"))
         self._btn_del.clicked.connect(self._delete_group)
         row1.addWidget(self._btn_del)
         lv.addLayout(row1)
 
         row2 = QHBoxLayout()
-        self._btn_up = QPushButton("上移")
+        self._btn_up = QPushButton(_("上移"))
         self._btn_up.clicked.connect(lambda: self._move_group(-1))
         row2.addWidget(self._btn_up)
-        self._btn_down = QPushButton("下移")
+        self._btn_down = QPushButton(_("下移"))
         self._btn_down.clicked.connect(lambda: self._move_group(1))
         row2.addWidget(self._btn_down)
         lv.addLayout(row2)
@@ -138,33 +142,35 @@ class WordbookDialog(QDialog):
 
         # ---- 底部操作
         btns = QHBoxLayout()
-        self._btn_add_to = QPushButton("加入到分组 ▸")
-        self._btn_add_to.setToolTip("把选中的生词加入其它分组（保留原有分组归属）")
+        self._btn_add_to = QPushButton(_("加入到分组 ▸"))
+        self._btn_add_to.setToolTip(_(
+            "把选中的生词加入其它分组（保留原有分组归属）"))
         self._btn_add_to.clicked.connect(self._add_to_group)
         btns.addWidget(self._btn_add_to)
-        self._btn_remove_from = QPushButton("从本分组移除")
-        self._btn_remove_from.setToolTip(
-            "把选中的生词移出当前分组；只属于本分组的词会自动归入「默认分组」")
+        self._btn_remove_from = QPushButton(_("从本分组移除"))
+        self._btn_remove_from.setToolTip(_(
+            "把选中的生词移出当前分组；只属于本分组的词会自动归入「默认分组」"))
         self._btn_remove_from.clicked.connect(self._remove_from_group)
         btns.addWidget(self._btn_remove_from)
-        self._btn_delete = QPushButton("彻底删除")
+        self._btn_delete = QPushButton(_("彻底删除"))
         self._btn_delete.clicked.connect(self._delete_words)
         btns.addWidget(self._btn_delete)
-        self._btn_clear = QPushButton("清空本分组")
+        self._btn_clear = QPushButton(_("清空本分组"))
         self._btn_clear.clicked.connect(self._clear_group)
         btns.addWidget(self._btn_clear)
         # 导入 / 导出是「文件级」操作，和左边的增删分开、靠右放
         btns.addStretch(1)
-        self._btn_import = QPushButton("导入…")
-        self._btn_import.setToolTip("从 txt / csv 导入生词，或从 json 备份恢复")
+        self._btn_import = QPushButton(_("导入…"))
+        self._btn_import.setToolTip(_(
+            "从 txt / csv 导入生词，或从 json 备份恢复"))
         self._btn_import.clicked.connect(self._import_words)
         btns.addWidget(self._btn_import)
-        self._btn_export = QPushButton("导出…")
-        self._btn_export.setToolTip(
-            "导出当前分组的生词；选 json 则导出含分组结构的完整备份")
+        self._btn_export = QPushButton(_("导出…"))
+        self._btn_export.setToolTip(_(
+            "导出当前分组的生词；选 json 则导出含分组结构的完整备份"))
         self._btn_export.clicked.connect(self._export_words)
         btns.addWidget(self._btn_export)
-        self._btn_close = QPushButton("关闭")
+        self._btn_close = QPushButton(_("关闭"))
         self._btn_close.clicked.connect(self.close)
         btns.addWidget(self._btn_close)
         layout.addLayout(btns)
@@ -176,9 +182,11 @@ class WordbookDialog(QDialog):
 
         self._group_list.blockSignals(True)
         self._group_list.clear()
-        self._add_group_item(f"全部（{stats['all']}）", ALL_GROUPS)
+        self._add_group_item(
+            _("全部（{}）").format(stats['all']), ALL_GROUPS, _("全部"))
         for g in self._wordbook.groups():
-            self._add_group_item(f"{g.name}（{counts.get(g.id, 0)}）", g.id)
+            self._add_group_item(
+                f"{g.name}（{counts.get(g.id, 0)}）", g.id, g.name)
         # 分组可能已经不存在（例如配置里还留着被删掉的分组 id）：
         # 这时必须回退到「全部」，否则会出现「左栏高亮『全部（N）』、
         # 右侧却按失效 id 查词而一片空白」，要手点一下分组才恢复。
@@ -202,9 +210,10 @@ class WordbookDialog(QDialog):
         self._note = ""
         self.refresh()
 
-    def _add_group_item(self, text: str, group_id: int):
+    def _add_group_item(self, text: str, group_id: int, name: str = ""):
         item = QListWidgetItem(text)
         item.setData(Qt.ItemDataRole.UserRole, group_id)
+        item.setData(_NAME_ROLE, name)
         if group_id == ALL_GROUPS:
             font = item.font()
             font.setBold(True)
@@ -223,12 +232,13 @@ class WordbookDialog(QDialog):
         words = self._wordbook.words(self._current_group)
         self._word_list.clear()
         for word, added_at in words:
-            item = QListWidgetItem(f"{word}    （{added_at}）")
+            item = QListWidgetItem(
+                _("{}    （{}）").format(word, added_at))
             item.setData(Qt.ItemDataRole.UserRole, word)
             self._word_list.addItem(item)
 
-        text = (f"「{self._current_group_name()}」共 {len(words)} 个生词"
-                f" · 双击查词")
+        text = _("「{}」共 {} 个生词 · 双击查词").format(
+            self._current_group_name(), len(words))
         if self._note:
             text += f" · {self._note}"
         self._count_label.setText(text)
@@ -237,14 +247,19 @@ class WordbookDialog(QDialog):
         self._btn_remove_from.setEnabled(is_real_group)
         self._btn_add_to.setEnabled(bool(words))
         self._btn_clear.setText(
-            "清空生词本" if self._current_group == ALL_GROUPS else "清空本分组")
+            _("清空生词本") if self._current_group == ALL_GROUPS
+            else _("清空本分组"))
 
     def _current_group_name(self) -> str:
+        """当前分组的名称（不带计数后缀），跨语言安全。
+
+        名称在 _add_group_item 里以 UserRole+1 单独存了一份，
+        避免靠「（）」括号切分——英文译文用的是半角括号，切分会失效。
+        """
         item = self._group_list.currentItem()
         if item is None:
             return ""
-        text = item.text()
-        return text[:text.rfind("（")] if "（" in text else text
+        return item.data(_NAME_ROLE) or ""
 
     def _update_group_buttons(self):
         gid = self._current_group
@@ -268,16 +283,18 @@ class WordbookDialog(QDialog):
         self._update_group_buttons()
 
     def _new_group(self):
-        name, ok = QInputDialog.getText(self, "新建分组", "分组名称：")
+        name, ok = QInputDialog.getText(
+            self, _("新建分组"), _("分组名称："))
         if not ok:
             return
         name = (name or "").strip()
         if not name:
             return
         if self._wordbook.add_group(name) is None:
-            QMessageBox.warning(self, "新建分组", f"分组「{name}」已存在。")
+            QMessageBox.warning(
+                self, _("新建分组"), _("分组「{}」已存在。").format(name))
             return
-        self._note = f"已新建分组「{name}」"
+        self._note = _("已新建分组「{}」").format(name)
         self.refresh()
         self.groupsChanged.emit()
 
@@ -286,16 +303,18 @@ class WordbookDialog(QDialog):
         if gid <= 0:
             return
         old = self._wordbook.group_name(gid)
-        name, ok = QInputDialog.getText(self, "重命名分组", "分组名称：", text=old)
+        name, ok = QInputDialog.getText(
+            self, _("重命名分组"), _("分组名称："), text=old)
         if not ok:
             return
         name = (name or "").strip()
         if not name or name == old:
             return
         if not self._wordbook.rename_group(gid, name):
-            QMessageBox.warning(self, "重命名分组", f"分组「{name}」已存在。")
+            QMessageBox.warning(
+                self, _("重命名分组"), _("分组「{}」已存在。").format(name))
             return
-        self._note = f"已重命名为「{name}」"
+        self._note = _("已重命名为「{}」").format(name)
         self.refresh()
         self.groupsChanged.emit()
 
@@ -305,31 +324,32 @@ class WordbookDialog(QDialog):
             return
         if gid == DEFAULT_GROUP_ID:
             QMessageBox.information(
-                self, "删除分组",
-                "「默认分组」不可删除（可重命名）。\n"
-                "它是点 ★ 时的兜底分组，删除后新收藏的生词将无处可放。")
+                self, _("删除分组"),
+                _("「默认分组」不可删除（可重命名）。\n"
+                  "它是点 ★ 时的兜底分组，删除后新收藏的生词将无处可放。"))
             return
         name = self._wordbook.group_name(gid)
         box = QMessageBox(self)
-        box.setWindowTitle("删除分组")
-        box.setText(f"确定删除分组「{name}」？")
-        box.setInformativeText(
+        box.setWindowTitle(_("删除分组"))
+        box.setText(_("确定删除分组「{}」？").format(name))
+        box.setInformativeText(_(
             "「仅删除分组」：分组内的生词继续保留在生词本中"
             "（只属于本分组的词会自动归入「默认分组」）。\n"
             "「同时删除生词」：这些生词将从生词本彻底移除"
-            "（包括它们在其它分组中的记录）。")
-        btn_keep = box.addButton("仅删除分组", QMessageBox.ButtonRole.AcceptRole)
-        btn_all = box.addButton("同时删除生词",
+            "（包括它们在其它分组中的记录）。"))
+        btn_keep = box.addButton(_("仅删除分组"),
+                                QMessageBox.ButtonRole.AcceptRole)
+        btn_all = box.addButton(_("同时删除生词"),
                                 QMessageBox.ButtonRole.DestructiveRole)
-        box.addButton("取消", QMessageBox.ButtonRole.RejectRole)
+        box.addButton(_("取消"), QMessageBox.ButtonRole.RejectRole)
         box.exec()
         clicked = box.clickedButton()
         if clicked is btn_keep:
             n = self._wordbook.remove_group(gid, with_words=False)
-            self._note = f"已删除分组「{name}」（{n} 个生词保留）"
+            self._note = _("已删除分组「{}」（{} 个生词保留）").format(name, n)
         elif clicked is btn_all:
             n = self._wordbook.remove_group(gid, with_words=True)
-            self._note = f"已删除分组「{name}」及其中的 {n} 个生词"
+            self._note = _("已删除分组「{}」及其中的 {} 个生词").format(name, n)
         else:
             return
         self._current_group = ALL_GROUPS
@@ -355,12 +375,12 @@ class WordbookDialog(QDialog):
 
     def _group_menu(self, pos):
         menu = QMenu(self)
-        act_new = menu.addAction("新建分组…")
-        act_rename = menu.addAction("重命名…")
-        act_delete = menu.addAction("删除分组…")
+        act_new = menu.addAction(_("新建分组…"))
+        act_rename = menu.addAction(_("重命名…"))
+        act_delete = menu.addAction(_("删除分组…"))
         menu.addSeparator()
-        act_up = menu.addAction("上移")
-        act_down = menu.addAction("下移")
+        act_up = menu.addAction(_("上移"))
+        act_down = menu.addAction(_("下移"))
         gid = self._current_group
         act_rename.setEnabled(gid > 0)
         act_delete.setEnabled(gid > 0 and gid != DEFAULT_GROUP_ID)
@@ -396,7 +416,8 @@ class WordbookDialog(QDialog):
         words = self._selected_words()
         if not words:
             QMessageBox.information(
-                self, "加入到分组", "请先在右侧选择生词（可按住 Ctrl / Shift 多选）。")
+                self, _("加入到分组"),
+                _("请先在右侧选择生词（可按住 Ctrl / Shift 多选）。"))
             return
 
         groups = self._wordbook.groups()
@@ -405,20 +426,22 @@ class WordbookDialog(QDialog):
         for g in groups:
             actions[menu.addAction(g.name)] = g.id
         menu.addSeparator()
-        act_new = menu.addAction("新建分组…")
+        act_new = menu.addAction(_("新建分组…"))
         chosen = menu.exec(self._btn_add_to.mapToGlobal(
             self._btn_add_to.rect().bottomLeft()))
         if chosen is None:
             return
 
         if chosen is act_new:
-            name, ok = QInputDialog.getText(self, "新建分组", "分组名称：")
+            name, ok = QInputDialog.getText(
+                self, _("新建分组"), _("分组名称："))
             if not ok or not (name or "").strip():
                 return
             g = self._wordbook.add_group((name or "").strip())
             if g is None:
-                QMessageBox.warning(self, "新建分组",
-                                    f"分组「{(name or '').strip()}」已存在。")
+                QMessageBox.warning(
+                    self, _("新建分组"),
+                    _("分组「{}」已存在。").format((name or "").strip()))
                 return
             gid, gname = g.id, g.name
             self.groupsChanged.emit()
@@ -427,8 +450,8 @@ class WordbookDialog(QDialog):
             gname = chosen.text()
 
         added = self._wordbook.add_words(words, gid)
-        self._note = (f"已把 {added} 个生词加入「{gname}」"
-                      f"（{len(words) - added} 个已在其中）")
+        self._note = _("已把 {} 个生词加入「{}」（{} 个已在其中）").format(
+            added, gname, len(words) - added)
         self.refresh()
         self.groupsChanged.emit()
         self.wordsChanged.emit()
@@ -440,7 +463,7 @@ class WordbookDialog(QDialog):
             return
         name = self._current_group_name()
         removed = self._wordbook.remove_words_from_group(words, gid)
-        self._note = f"已从「{name}」移除 {removed} 个生词"
+        self._note = _("已从「{}」移除 {} 个生词").format(name, removed)
         self.refresh()
         self.groupsChanged.emit()
         self.wordsChanged.emit()
@@ -450,9 +473,9 @@ class WordbookDialog(QDialog):
         if not words:
             return
         btn = QMessageBox.question(
-            self, "彻底删除",
-            f"确定从生词本彻底删除选中的 {len(words)} 个生词？\n"
-            "（会同时移除它们在所有分组中的记录，不可撤销）",
+            self, _("彻底删除"),
+            _("确定从生词本彻底删除选中的 {} 个生词？\n"
+              "（会同时移除它们在所有分组中的记录，不可撤销）").format(len(words)),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -460,7 +483,7 @@ class WordbookDialog(QDialog):
             return
         for w in words:
             self._wordbook.remove(w)
-        self._note = f"已彻底删除 {len(words)} 个生词"
+        self._note = _("已彻底删除 {} 个生词").format(len(words))
         self.refresh()
         self.groupsChanged.emit()
         self.wordsChanged.emit()
@@ -469,24 +492,24 @@ class WordbookDialog(QDialog):
         gid = self._current_group
         name = self._current_group_name()
         if gid == ALL_GROUPS:
-            text = ("确定清空整个生词本？\n"
-                    "所有生词及其分组关联都会被删除，不可撤销。")
+            text = _("确定清空整个生词本？\n"
+                     "所有生词及其分组关联都会被删除，不可撤销。")
         elif gid == DEFAULT_GROUP_ID:
-            text = (f"确定清空分组「{name}」？\n"
-                    "只属于本分组的生词会被彻底删除"
-                    "（同时也在其它分组的词会保留在那些分组里）。")
+            text = _("确定清空分组「{}」？\n"
+                     "只属于本分组的生词会被彻底删除"
+                     "（同时也在其它分组的词会保留在那些分组里）。").format(name)
         else:
-            text = (f"确定清空分组「{name}」？\n"
-                    "只属于本分组的生词会自动归入「默认分组」，不会丢失。")
+            text = _("确定清空分组「{}」？\n"
+                     "只属于本分组的生词会自动归入「默认分组」，不会丢失。").format(name)
         btn = QMessageBox.question(
-            self, "清空", text,
+            self, _("清空"), text,
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
         if btn != QMessageBox.StandardButton.Yes:
             return
         self._wordbook.clear(gid)
-        self._note = f"已清空「{name}」"
+        self._note = _("已清空「{}」").format(name)
         self.refresh()
         self.groupsChanged.emit()
         self.wordsChanged.emit()
@@ -515,14 +538,15 @@ class WordbookDialog(QDialog):
     def _export_words(self):
         rows = self._wordbook.export_rows(self._current_group)
         if not rows:
-            QMessageBox.information(self, "导出", "当前分组没有可导出的生词。")
+            QMessageBox.information(
+                self, _("导出"), _("当前分组没有可导出的生词。"))
             return
 
         stamp = datetime.now().strftime("%Y%m%d")
         group = self._safe_name(self._current_group_name())
         default = f"TinyDict-{group}-{stamp}.csv"
         path, chosen = QFileDialog.getSaveFileName(
-            self, "导出生词本", default, _EXPORT_FILTER)
+            self, _("导出生词本"), default, _EXPORT_FILTER)
         if not path:
             return
 
@@ -547,15 +571,17 @@ class WordbookDialog(QDialog):
                     "utf-8")
                 rows = all_rows
         except OSError as e:
-            QMessageBox.warning(self, "导出失败", f"写入文件失败：\n{e}")
+            QMessageBox.warning(
+                self, _("导出失败"), _("写入文件失败：\n{}").format(e))
             return
 
-        self._note = f"已导出 {len(rows)} 个生词到 {os.path.basename(path)}"
+        self._note = _("已导出 {} 个生词到 {}").format(
+            len(rows), os.path.basename(path))
         self._refresh_words()
 
     def _import_words(self):
         path, _chosen = QFileDialog.getOpenFileName(
-            self, "导入生词", "", _IMPORT_FILTER)
+            self, _("导入生词"), "", _IMPORT_FILTER)
         if not path:
             return
         try:
@@ -563,7 +589,8 @@ class WordbookDialog(QDialog):
             with open(path, "r", encoding="utf-8-sig", errors="replace") as f:
                 text = f.read()
         except OSError as e:
-            QMessageBox.warning(self, "导入失败", f"读取文件失败：\n{e}")
+            QMessageBox.warning(
+                self, _("导入失败"), _("读取文件失败：\n{}").format(e))
             return
 
         if _io.ext_of(path) == "json":
@@ -573,9 +600,10 @@ class WordbookDialog(QDialog):
         words = _io.parse_words(text)
         if not words:
             QMessageBox.information(
-                self, "导入",
-                f"没有从「{os.path.basename(path)}」读到生词。\n"
-                "纯文本 / CSV 里每行写一个词即可（CSV 取第一列）。")
+                self, _("导入"),
+                _("没有从「{}」读到生词。\n"
+                  "纯文本 / CSV 里每行写一个词即可（CSV 取第一列）。").format(
+                    os.path.basename(path)))
             return
         self._import_plain(words, os.path.basename(path))
 
@@ -586,20 +614,22 @@ class WordbookDialog(QDialog):
         for g in self._wordbook.groups():
             actions[menu.addAction(g.name)] = g.id
         menu.addSeparator()
-        act_new = menu.addAction("新建分组…")
+        act_new = menu.addAction(_("新建分组…"))
         chosen = menu.exec(self._btn_import.mapToGlobal(
             self._btn_import.rect().bottomLeft()))
         if chosen is None:
             return
 
         if chosen is act_new:
-            name, ok = QInputDialog.getText(self, "新建分组", "分组名称：")
+            name, ok = QInputDialog.getText(
+                self, _("新建分组"), _("分组名称："))
             if not ok or not (name or "").strip():
                 return
             g = self._wordbook.add_group((name or "").strip())
             if g is None:
                 QMessageBox.warning(
-                    self, "新建分组", f"分组「{(name or '').strip()}」已存在。")
+                    self, _("新建分组"),
+                    _("分组「{}」已存在。").format((name or "").strip()))
                 return
             gid, gname = g.id, g.name
             self.groupsChanged.emit()
@@ -608,8 +638,9 @@ class WordbookDialog(QDialog):
 
         added = self._wordbook.add_words(words, gid)
         dup = len(words) - added
-        self._note = (f"已从 {filename} 导入 {added} 个生词到「{gname}」"
-                      + (f"（{dup} 个已在其中）" if dup else ""))
+        self._note = (_("已从 {} 导入 {} 个生词到「{}」{}").format(
+            filename, added, gname,
+            _("（{} 个已在其中）").format(dup) if dup else ""))
         self.refresh()
         self.groupsChanged.emit()
         self.wordsChanged.emit()
@@ -618,24 +649,26 @@ class WordbookDialog(QDialog):
         try:
             payload = _io.parse_backup(text)
         except ValueError as e:
-            QMessageBox.warning(self, "导入失败", str(e))
+            QMessageBox.warning(self, _("导入失败"), str(e))
             return
         words = payload["words"]
         if not words:
-            QMessageBox.information(self, "导入", "备份文件里没有生词。")
+            QMessageBox.information(self, _("导入"), _("备份文件里没有生词。"))
             return
         btn = QMessageBox.question(
-            self, "导入备份",
-            f"备份包含 {len(words)} 个生词、{len(payload['groups'])} 个分组。\n"
-            "将合并到现有生词本：缺少的分组自动新建，重复的词跳过。",
+            self, _("导入备份"),
+            _("备份包含 {} 个生词、{} 个分组。\n"
+              "将合并到现有生词本：缺少的分组自动新建，重复的词跳过。").format(
+                len(words), len(payload['groups'])),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.Yes)
         if btn != QMessageBox.StandardButton.Yes:
             return
 
         stat = self._wordbook.restore(payload)
-        self._note = (f"已导入备份：新增 {stat['words']} 个生词、"
-                      f"{stat['tags']} 条分组归属、{stat['groups']} 个分组")
+        self._note = (_("已导入备份：新增 {} 个生词、"
+                        "{} 条分组归属、{} 个分组").format(
+                            stat['words'], stat['tags'], stat['groups']))
         self.refresh()
         self.groupsChanged.emit()
         self.wordsChanged.emit()
@@ -645,15 +678,15 @@ class WordbookDialog(QDialog):
         if item is None:
             return
         menu = QMenu(self)
-        act_lookup = menu.addAction("查词")
+        act_lookup = menu.addAction(_("查词"))
         menu.addSeparator()
-        act_add = menu.addAction("加入到分组 ▸")
+        act_add = menu.addAction(_("加入到分组 ▸"))
         act_remove = menu.addAction(
-            f"从「{self._current_group_name()}」移除"
-            if self._current_group > 0 else "从本分组移除")
+            _("从「{}」移除").format(self._current_group_name())
+            if self._current_group > 0 else _("从本分组移除"))
         act_remove.setEnabled(self._current_group > 0)
         menu.addSeparator()
-        act_delete = menu.addAction("彻底删除")
+        act_delete = menu.addAction(_("彻底删除"))
         chosen = menu.exec(self._word_list.viewport().mapToGlobal(pos))
         if chosen is act_lookup:
             self._on_double_clicked(item)

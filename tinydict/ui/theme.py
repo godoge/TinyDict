@@ -9,6 +9,8 @@
 
 from PySide6.QtCore import QObject, Signal
 
+from ..i18n import _
+
 
 # ----------------------------------------------------------------------
 # 系统主题检测
@@ -423,7 +425,9 @@ STATUS_LABELS_DARK = {
 
 def status_labels(mode: str) -> dict:
     """词库管理对话框中状态列的 {状态键: (文本, 颜色)} 映射。"""
-    return STATUS_LABELS_DARK if mode == "dark" else STATUS_LABELS_LIGHT
+    labels = STATUS_LABELS_DARK if mode == "dark" else STATUS_LABELS_LIGHT
+    # 文本在调用时按当前语言翻译（而不是模块加载时，否则拿不到切换后的语言）
+    return {k: (_(_lbl), color) for k, (_lbl, color) in labels.items()}
 
 
 def tip_color(mode: str) -> str:

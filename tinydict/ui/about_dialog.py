@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import __version__, APP_NAME
+from ..i18n import _
 from .icons import app_icon
 
 REPO_URL = "https://github.com/godoge/TinyDict"
@@ -36,7 +37,7 @@ class AboutDialog(QDialog):
 
     def __init__(self, dict_summary: str = "", parent=None):
         super().__init__(parent)
-        self.setWindowTitle(f"关于 {APP_NAME}")
+        self.setWindowTitle(_("关于 {}").format(APP_NAME))
         self.setModal(True)
         self.setMinimumWidth(420)
 
@@ -67,9 +68,9 @@ class AboutDialog(QDialog):
             f'<span style="font-size:19px;font-weight:600">{APP_NAME}</span>'
             f'<span style="font-size:13px"> &nbsp;v{__version__}</span>')
         col.addWidget(title)
-        desc = QLabel(
+        desc = QLabel(_(
             "一款 Windows 上的 MDX 词典：添加自己的 .mdx 词库后即加即用，"
-            "查词全程在你自己的电脑上完成，不上传任何内容。")
+            "查词全程在你自己的电脑上完成，不上传任何内容。"))
         desc.setWordWrap(True)
         desc.setFixedWidth(300)
         col.addWidget(desc)
@@ -81,12 +82,12 @@ class AboutDialog(QDialog):
         box = QVBoxLayout()
         box.setSpacing(6)
         box.addLayout(self._row(
-            "开源地址", f'<a href="{REPO_URL}">{REPO_URL}</a>', link=True))
+            _("开源地址"), f'<a href="{REPO_URL}">{REPO_URL}</a>', link=True))
         box.addLayout(self._row(
-            "问题反馈", f'<a href="{ISSUES_URL}">在 GitHub 上提交问题</a>',
+            _("问题反馈"), f'<a href="{ISSUES_URL}">{_("在 GitHub 上提交问题")}</a>',
             link=True))
         if dict_summary:
-            box.addLayout(self._row("已启用词典", dict_summary))
+            box.addLayout(self._row(_("已启用词典"), dict_summary))
         return box
 
     def _row(self, label: str, value: str, *, link: bool = False) -> QHBoxLayout:
@@ -111,8 +112,10 @@ class AboutDialog(QDialog):
 
     def _build_note(self) -> QLabel:
         note = QLabel(
-            '<span style="font-size:11px">本软件只负责本地解析与展示，'
-            "词典文件由你自行提供，其中的内容版权归各词典原作者所有。</span>")
+            '<span style="font-size:11px">'
+            + _("本软件只负责本地解析与展示，"
+                "词典文件由你自行提供，其中的内容版权归各词典原作者所有。")
+            + "</span>")
         note.setWordWrap(True)
         return note
 
@@ -120,13 +123,13 @@ class AboutDialog(QDialog):
         row = QHBoxLayout()
         row.setSpacing(8)
 
-        btn_copy = QPushButton("复制开源地址")
-        btn_copy.setToolTip("把项目地址复制到剪贴板")
+        btn_copy = QPushButton(_("复制开源地址"))
+        btn_copy.setToolTip(_("把项目地址复制到剪贴板"))
         btn_copy.clicked.connect(lambda: copy_to_clipboard(REPO_URL))
         row.addWidget(btn_copy)
 
-        btn_update = QPushButton("查看新版本")
-        btn_update.setToolTip("打开 Releases 页面，看看有没有更新的版本")
+        btn_update = QPushButton(_("查看新版本"))
+        btn_update.setToolTip(_("打开 Releases 页面，看看有没有更新的版本"))
         btn_update.clicked.connect(lambda: open_url(RELEASES_URL))
         row.addWidget(btn_update)
 

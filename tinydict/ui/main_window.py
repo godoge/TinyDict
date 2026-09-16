@@ -27,6 +27,7 @@ from ..core.history import HistoryBook, display_text
 from ..core import dict_config
 from .. import __version__
 from ..config import Config
+from ..i18n import _, get_language, restart_application
 from . import theme as _theme
 from .icons import nav_icon
 from .about_dialog import AboutDialog, RELEASES_URL, REPO_URL
@@ -416,7 +417,25 @@ def entry_page(raw_html: str, word: str, theme_mode: str = "light",
 
 
 def welcome_page(theme_mode: str = "light") -> str:
-    return _page("""
+    if get_language() == "en_US":
+        body = """
+<div class="sd-welcome">
+<h1>TinyDict</h1>
+<p class="sd-tip">MDX dictionaries &middot; your wordbooks stay on this PC; lookups upload nothing</p>
+<ul>
+<li>Click <b>Dictionaries</b> at the top right to add <code>.mdx</code> files, or pick a
+<b>dictionary folder</b> (all dictionaries inside are scanned) — ready to use instantly, no import</li>
+<li>Type a word in the search box above and press Enter; the left list shows live suggestions</li>
+<li>Click <b>★</b> to open a menu and tick the <b>wordbook groups</b> to add the current entry to
+(you can add it to several), then open <b>Wordbook</b> to review and organize by group
+(a word can belong to multiple groups)</li>
+<li><b>Pin window</b> keeps the window always on top; closing the window minimizes to the tray by default</li>
+<li>Default global shortcuts: <code>Ctrl+Alt+D</code> show/hide window,
+<code>Ctrl+Alt+Q</code> screen text capture (changeable in Settings)</li>
+</ul>
+</div>"""
+    else:
+        body = """
 <div class="sd-welcome">
 <h1>TinyDict</h1>
 <p class="sd-tip">MDX 词典 &middot; 词库保存在本机，查词不上传任何内容</p>
@@ -430,21 +449,34 @@ def welcome_page(theme_mode: str = "light") -> str:
 <li>默认全局快捷键：<code>Ctrl+Alt+D</code> 显示/隐藏窗口，
 <code>Ctrl+Alt+Q</code> 屏幕划词取词（可在设置中修改）</li>
 </ul>
-</div>""", theme_mode)
+</div>"""
+    return _page(body, theme_mode)
 
 
 def not_found_page(word: str, theme_mode: str = "light") -> str:
-    return _page(
-        f'<div class="sd-headword">{_esc(word)}</div>'
-        '<div class="sd-notfound">'
-        "<p><b>没有找到该词条</b></p>"
-        "<p>建议：</p>"
-        "<ul><li>检查拼写（可参考左侧候选列表）</li>"
-        "<li>在「词库」中确认词库已启用且状态为「就绪」"
-        "（新添加的词库后台加载中，稍候即可查询）</li></ul>"
-        "</div>",
-        theme_mode,
-    )
+    if get_language() == "en_US":
+        body = (
+            f'<div class="sd-headword">{_esc(word)}</div>'
+            '<div class="sd-notfound">'
+            "<p><b>No entry found</b></p>"
+            "<p>Suggestions:</p>"
+            "<ul><li>Check the spelling (see the suggestions on the left)</li>"
+            "<li>In Dictionaries, make sure the dictionary is enabled and Ready "
+            "(newly added dictionaries are still loading in the background)</li></ul>"
+            "</div>"
+        )
+    else:
+        body = (
+            f'<div class="sd-headword">{_esc(word)}</div>'
+            '<div class="sd-notfound">'
+            "<p><b>没有找到该词条</b></p>"
+            "<p>建议：</p>"
+            "<ul><li>检查拼写（可参考左侧候选列表）</li>"
+            "<li>在「词库」中确认词库已启用且状态为「就绪」"
+            "（新添加的词库后台加载中，稍候即可查询）</li></ul>"
+            "</div>"
+        )
+    return _page(body, theme_mode)
 
 
 def loading_page(word: str, pending: int, theme_mode: str = "light") -> str:
@@ -455,14 +487,24 @@ def loading_page(word: str, pending: int, theme_mode: str = "light") -> str:
     MainWindow 会自动重新查询并替换本页。
     """
     n = max(1, int(pending))
-    return _page(
-        f'<div class="sd-headword">{_esc(word)}</div>'
-        '<div class="sd-notfound">'
-        f"<p><b>还有 {n} 部词库正在加载…</b></p>"
-        "<p>已加载完的词库里没有找到该词条，加载完成后会自动重新查询。</p>"
-        "</div>",
-        theme_mode,
-    )
+    if get_language() == "en_US":
+        body = (
+            f'<div class="sd-headword">{_esc(word)}</div>'
+            '<div class="sd-notfound">'
+            f"<p><b>Still loading {n} dictionary(ies)…</b></p>"
+            "<p>No match yet in the dictionaries loaded so far; "
+            "it will re-query automatically when loading finishes.</p>"
+            "</div>"
+        )
+    else:
+        body = (
+            f'<div class="sd-headword">{_esc(word)}</div>'
+            '<div class="sd-notfound">'
+            f"<p><b>还有 {n} 部词库正在加载…</b></p>"
+            "<p>已加载完的词库里没有找到该词条，加载完成后会自动重新查询。</p>"
+            "</div>"
+        )
+    return _page(body, theme_mode)
 
 
 # ----------------------------------------------------------------------
@@ -610,16 +652,16 @@ class EntryView(QWebEngineView):
         if sel:
             label = (sel if len(sel) <= self.LABEL_MAX
                      else sel[:self.LABEL_MAX] + "…")
-            act_search = menu.addAction(f"搜索「{label}」")
-            menu.addAction("复制", lambda: self._copy(sel))
+            act_search = menu.addAction(_("搜索「{}」").format(label))
+            menu.addAction(_("复制"), lambda: self._copy(sel))
             menu.addSeparator()
 
-        act_back = menu.addAction("后退")
+        act_back = menu.addAction(_("后退"))
         # setHtml 也会进历史，故以 action 的可用状态为准
         act_back.setEnabled(page.action(QWebEnginePage.WebAction.Back).isEnabled())
-        act_reload = menu.addAction("重新加载")
+        act_reload = menu.addAction(_("重新加载"))
         menu.addSeparator()
-        act_all = menu.addAction("全选")
+        act_all = menu.addAction(_("全选"))
 
         chosen = menu.exec(event.globalPos())
         if chosen is None:
@@ -804,16 +846,17 @@ class MainWindow(QMainWindow):
         root.setSpacing(6)
 
         # ---- 顶栏（按钮横向并排，整体靠左、紧贴左右箭头）
-        # 后退 / 前进 / 收藏 / 词库 / 生词本 / 历史 / 更多 一字排开地放在窗口
-        # 左上角、紧挨着左右箭头；末尾用弹性空白把剩余空间顶到右边，按钮不会往右散开。
+        # 顶栏分两组：左侧是「浏览导航 + 收藏」（← → | ☆），紧挨窗口左边；
+        # 右侧是「功能工具栏」（词库 / 生词本 / 历史 / 更多），靠 addStretch 顶到右边。
+        # 两组之间用弹性空白隔开，按钮各自贴边、不往中间散开。
         top = QHBoxLayout()
         top.setSpacing(4)
 
         self._btn_back = QToolButton(text="←", enabled=False)
-        self._btn_back.setToolTip("后退")
+        self._btn_back.setToolTip(_("后退"))
         self._btn_back.clicked.connect(self._go_back)
         self._btn_fwd = QToolButton(text="→", enabled=False)
-        self._btn_fwd.setToolTip("前进")
+        self._btn_fwd.setToolTip(_("前进"))
         self._btn_fwd.clicked.connect(self._go_forward)
         top.addWidget(self._btn_back)
         top.addWidget(self._btn_fwd)
@@ -831,9 +874,9 @@ class MainWindow(QMainWindow):
         # 搜索框移到左侧候选词列表上方（见下方 left_panel），顶栏不再单独
         # 占一行那么宽的位置；完整提示挪到 tooltip，窄框里只留短占位文。
         self.search_edit = QLineEdit(objectName="search_edit")
-        self.search_edit.setPlaceholderText("输入单词，回车查词")
+        self.search_edit.setPlaceholderText(_("输入单词，回车查词"))
         self.search_edit.setToolTip(
-            "输入单词查询，回车查词（Ctrl+Alt+D 显示/隐藏窗口）")
+            _("输入单词查询，回车查词（Ctrl+Alt+D 显示/隐藏窗口）"))
         self.search_edit.setClearButtonEnabled(True)
         self.search_edit.returnPressed.connect(self._on_return)
         self.search_edit.textChanged.connect(self._on_text_changed)
@@ -844,7 +887,7 @@ class MainWindow(QMainWindow):
         # 点 ★ 弹出下拉，列出所有生词本分组并勾选当前词所属分组；
         # 勾选 / 取消即把当前词加入 / 移出对应分组。原「分组下拉框」已并入这里。
         self._btn_star = QToolButton(text="☆")
-        self._btn_star.setToolTip("点 ★ 选择加入 / 移出哪些生词本分组")
+        self._btn_star.setToolTip(_("点 ★ 选择加入 / 移出哪些生词本分组"))
         self._btn_star.setVisible(False)   # 启动无当前词，先藏起来
         self._star_menu = QMenu(self._btn_star)
         self._btn_star.setMenu(self._star_menu)
@@ -852,16 +895,20 @@ class MainWindow(QMainWindow):
         self._star_menu.aboutToShow.connect(self._build_star_menu)
         top.addWidget(self._btn_star)
 
+        # 弹性空白：把后续的功能工具栏（词库 / 生词本 / 历史 / 更多）顶到窗口右侧，
+        # 与左侧的「← → | ☆」分组拉开距离。
+        top.addStretch(1)
+
         # 词典功能按钮（词库 / 生词本 / 历史）—— 与查词直接相关，各自成独立按钮；
         # 窗口 / 应用级功能（置顶窗口 / 设置 / 关于）收进「更多」下拉，和词典按钮
         # 分开。图标是运行时用 QPainter 画的（见 icons.nav_icon），浅/深主题下颜色
         # 不同，统一在 _refresh_nav_icons 里重画，因此这里只建按钮、挂信号。
         self._nav_buttons = []
         for kind, text, tip, slot in (
-            ("dict", "词库", "管理 MDX 词库（导入 / 删除 / 优先级）",
+            ("dict", _("词库"), _("管理 MDX 词库（导入 / 删除 / 优先级）"),
              self.open_dict_manager),
-            ("wordbook", "生词本", "查看生词本", self.open_wordbook),
-            ("history", "历史", "查看查询历史", self.open_history),
+            ("wordbook", _("生词本"), _("查看生词本"), self.open_wordbook),
+            ("history", _("历史"), _("查看查询历史"), self.open_history),
         ):
             btn = QToolButton(text=text)
             btn.setToolTip(tip)
@@ -874,28 +921,26 @@ class MainWindow(QMainWindow):
         # 「更多」下拉：置顶窗口 / 设置 / 关于。
         # 置顶窗口 是可勾选的动作（对应原先的 checkable 按钮），勾选即常驻最前；
         # 设置 / 关于 打开对应对话框。InstantPopup：点击按钮立刻弹出菜单。
-        more = QToolButton(text="更多")
-        more.setToolTip("置顶窗口、设置、关于")
+        more = QToolButton(text=_("更多"))
+        more.setToolTip(_("置顶窗口、设置、关于"))
         more.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         more.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         more_menu = QMenu(more)
         more.setMenu(more_menu)
 
-        act_pin = more_menu.addAction("置顶窗口")
+        act_pin = more_menu.addAction(_("置顶窗口"))
         act_pin.setCheckable(True)
-        act_pin.setToolTip("窗口常驻最前")
+        act_pin.setToolTip(_("窗口常驻最前"))
         act_pin.triggered.connect(self._on_pin)
         more_menu.addSeparator()
-        act_settings = more_menu.addAction("设置")
-        act_settings.setToolTip("快捷键等设置")
+        act_settings = more_menu.addAction(_("设置"))
+        act_settings.setToolTip(_("快捷键等设置"))
         act_settings.triggered.connect(self.open_settings)
-        act_about = more_menu.addAction("关于")
-        act_about.setToolTip("关于本软件")
+        act_about = more_menu.addAction(_("关于"))
+        act_about.setToolTip(_("关于本软件"))
         act_about.triggered.connect(self.open_about)
 
         top.addWidget(more)
-        # 末尾弹性空白：把上面一整排按钮顶到左边、紧贴左右箭头，不往右散开
-        top.addStretch(1)
         # 供 _refresh_nav_icons 重画图标，以及将来需要改下拉内容时定位
         self._more_btn = more
         self._more_menu = more_menu
@@ -1013,7 +1058,7 @@ class MainWindow(QMainWindow):
         for word, queried_at, times in self.history.recent(limit=30):
             item = QListWidgetItem(display_text(word, queried_at, times))
             item.setData(Qt.ItemDataRole.UserRole, word)
-            item.setToolTip(f"{word} · 最近查过")
+            item.setToolTip(_("{} · 最近查过").format(word))
             self.suggest_list.addItem(item)
 
     def _on_suggestion_clicked(self, item: QListWidgetItem):
@@ -1157,10 +1202,10 @@ class MainWindow(QMainWindow):
                 self._view.setHtml(loading_page(word, pending, mode),
                                    QUrl("mdx://0/"))
                 self._status_info.setText(
-                    f"还有 {pending} 部词库正在加载，完成后自动重新查询")
+                    _("还有 {} 部词库正在加载，完成后自动重新查询").format(pending))
             else:
                 self._view.setHtml(not_found_page(word, mode), QUrl("mdx://0/"))
-                self._status_info.setText("未找到词条")
+                self._status_info.setText(_("未找到词条"))
 
         if push_history:
             self._push_history(word)
@@ -1222,14 +1267,14 @@ class MainWindow(QMainWindow):
             self._schedule_theme_probe()
         others = len(self._results) - 1
         pending = self._pending_mount_count()
-        msg = f"词典：{r.dict_name}"
+        msg = _("词典：{}").format(r.dict_name)
         if others > 0:
-            msg += f" · 另有 {others} 部词库命中"
+            msg += _(" · 另有 {} 部词库命中").format(others)
         if pending:
             # 结果尚不完整，必须提示，否则用户会以为"这个词库查不到"。
             # 注意这里不能用 elif：命中多部词库的同时仍可能有词库在加载，
             # 那种情况下结果同样是不完整的。
-            msg += f" · 另有 {pending} 部词库仍在加载，完成后自动补齐"
+            msg += _(" · 另有 {} 部词库仍在加载，完成后自动补齐").format(pending)
         self._status_info.setText(msg)
 
         # 调试：把词条处理前后的 HTML 与资源诊断落盘。
@@ -1308,20 +1353,21 @@ class MainWindow(QMainWindow):
         return DEFAULT_GROUP_ID
 
     def _create_group(self):
-        name, ok = QInputDialog.getText(self, "新建分组", "分组名称：")
+        name, ok = QInputDialog.getText(self, _("新建分组"), _("分组名称："))
         if not ok or not (name or "").strip():
             self._reload_groups()          # 取消：保持现状
             return
         name = name.strip()
         group = self.wordbook.add_group(name)
         if group is None:
-            QMessageBox.warning(self, "新建分组", f"分组「{name}」已存在。")
+            QMessageBox.warning(self, _("新建分组"),
+                                _("分组「{}」已存在。").format(name))
             self._reload_groups()
             return
         self._config["wordbook_group_id"] = group.id
         self._config.save()
         self._reload_groups()
-        self._status_info.setText(f"已新建分组：{name}")
+        self._status_info.setText(_("已新建分组：{}").format(name))
         self.wordbook_changed.emit()       # 已打开的生词本窗口同步刷新
 
     # ---------------------------------------------------------------- 生词
@@ -1338,8 +1384,8 @@ class MainWindow(QMainWindow):
         self._btn_star.blockSignals(False)
         names = self.wordbook.groups_of(self._current_word)
         self._btn_star.setToolTip(
-            (f"所属分组：{'、'.join(names)}\n" if names else "")
-            + "点 ★ 选择加入 / 移出哪些生词本分组")
+            ((_("所属分组：{}\n").format("、".join(names))) if names else "")
+            + _("点 ★ 选择加入 / 移出哪些生词本分组"))
 
     def _build_star_menu(self):
         """点 ★ 时按需重建下拉：列出所有分组并勾选当前词所属分组。
@@ -1350,14 +1396,14 @@ class MainWindow(QMainWindow):
         if not word:
             return
         for g in self.wordbook.groups():
-            act = menu.addAction(f"{g.name}（{g.count}）")
+            act = menu.addAction(_("{}（{}）").format(g.name, g.count))
             act.setCheckable(True)
             act.setChecked(self.wordbook.has(word, g.id))
             gid = g.id
             act.triggered.connect(
                 lambda checked, gid=gid: self._on_star_group(gid, checked))
         menu.addSeparator()
-        new_act = menu.addAction("＋ 新建分组…")
+        new_act = menu.addAction(_("＋ 新建分组…"))
         new_act.triggered.connect(self._create_group)
 
     def _on_star_group(self, gid: int, checked: bool):
@@ -1365,15 +1411,18 @@ class MainWindow(QMainWindow):
         word = self._current_word
         if not word:
             return
-        gname = self.wordbook.group_name(gid) or "生词本"
+        gname = self.wordbook.group_name(gid) or _("生词本")
         if checked:
             if self.wordbook.add(word, gid):
-                self._status_info.setText(f"已加入「{gname}」：{word}")
+                self._status_info.setText(
+                    _("已加入「{}」：{}").format(gname, word))
             else:
-                self._status_info.setText(f"{word} 已在「{gname}」中")
+                self._status_info.setText(
+                    _("{} 已在「{}」中").format(word, gname))
         else:
             self.wordbook.remove_from_group(word, gid)
-            self._status_info.setText(f"已从「{gname}」移除：{word}")
+            self._status_info.setText(
+                _("已从「{}」移除：{}").format(gname, word))
         self._update_star()
         self.wordbook_changed.emit()
 
@@ -1403,7 +1452,7 @@ class MainWindow(QMainWindow):
         dicts = self._service.enabled_dicts()
         if not dicts:
             self._status_dict.setText(
-                "未启用任何词库，点击「词库」添加 .mdx 文件或词库文件夹")
+                _("未启用任何词库，点击「词库」添加 .mdx 文件或词库文件夹"))
             self._status_dict.setToolTip("")
             return
         mounted = sum(1 for d in dicts if self._service.is_mounted(d.id))
@@ -1414,25 +1463,27 @@ class MainWindow(QMainWindow):
         if missing:
             names = "、".join(d.name for d in missing)
             self._status_dict.setText(
-                f"⚠ {len(missing)} 部词库文件缺失或无法加载，"
-                f"<a href='manage'>点击「词库管理」查看并修复</a>")
+                _("⚠ {} 部词库文件缺失或无法加载，"
+                  "<a href='manage'>点击「词库管理」查看并修复</a>").format(
+                    len(missing)))
             self._status_dict.setToolTip(
-                "缺失词库：" + names + "\n"
-                "（通常是文件夹被改名 / 移动后路径失效）\n"
-                "打开「词库管理」选中后点「修复路径…」重新指定 .mdx 文件")
+                _("缺失词库：{}\n（通常是文件夹被改名 / 移动后路径失效）\n"
+                  "打开「词库管理」选中后点「修复路径…」重新指定 .mdx 文件").format(
+                    names))
         elif mounted < len(dicts):
             loading = len(dicts) - mounted
             self._status_dict.setText(
-                f"词库加载中 {mounted}/{len(dicts)} 部"
-                f"（{loading} 部加载中） · 已就绪 {total_entries:,} 词条")
+                _("词库加载中 {}/{} 部（{} 部加载中） · 已就绪 {} 词条").format(
+                    mounted, len(dicts), loading, total_entries))
             self._status_dict.setToolTip("")
         else:
             self._status_dict.setText(
-                f"已启用 {len(dicts)} 部词库 · {total_entries:,} 词条")
+                _("已启用 {} 部词库 · {} 词条").format(len(dicts), total_entries))
             self._status_dict.setToolTip("")
 
     def _on_mount_progress(self, done: int, total: int, name: str):
-        self._status_dict.setText(f"词库加载中 {done}/{total}：{name}")
+        self._status_dict.setText(
+            _("词库加载中 {}/{}：{}").format(done, total, name))
 
     def _on_dict_mounted(self, dict_id: int):
         self._refresh_dict_status()
@@ -1473,7 +1524,8 @@ class MainWindow(QMainWindow):
     def open_history(self):
         """打开查询历史窗口（没有历史对象时直接提示，不弹空窗）。"""
         if self.history is None:
-            QMessageBox.information(self, "查询历史", "当前未启用查询历史。")
+            QMessageBox.information(
+                self, _("查询历史"), _("当前未启用查询历史。"))
             return
         if self._history_dialog is None:
             self._history_dialog = HistoryDialog(
@@ -1488,6 +1540,7 @@ class MainWindow(QMainWindow):
         self._history_dialog.activateWindow()
 
     def open_settings(self):
+        prev_language = str(self._config["language"])
         dlg = SettingsDialog(self._config, self)
         if dlg.exec() == SettingsDialog.DialogCode.Accepted:
             self._config.save()
@@ -1498,6 +1551,14 @@ class MainWindow(QMainWindow):
                 self._reapply_theme(self._current_theme_mode())
             if self._tray is not None:
                 self._tray.apply_config()
+            # 语言切换需要整进程重启才能完全生效（所有控件都只在启动时构建一次）。
+            if str(self._config["language"]) != prev_language:
+                # 先保存当前窗口几何位置，重启后恢复
+                try:
+                    self._save_window_state()
+                except Exception:
+                    pass
+                restart_application()
 
     def open_about(self):
         dlg = AboutDialog(dict_summary=self._dict_summary(), parent=self)
@@ -1513,7 +1574,7 @@ class MainWindow(QMainWindow):
             return ""
         mounted = sum(1 for d in enabled
                       if self._service.is_mounted(d.id))
-        return f"{len(enabled)} 部（{mounted} 部已就绪）"
+        return _("{} 部（{} 部已就绪）").format(len(enabled), mounted)
 
     # ---------------------------------------------------------------- 对外接口
     def bring_up_and_lookup(self, word: str):

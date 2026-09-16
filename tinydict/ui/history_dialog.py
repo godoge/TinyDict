@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..core.history import HistoryBook, display_text
+from ..i18n import _
 from . import theme as _theme
 
 
@@ -31,7 +32,7 @@ class HistoryDialog(QDialog):
         self._config = config
         self._theme_manager = theme_manager
 
-        self.setWindowTitle("查询历史")
+        self.setWindowTitle(_("查询历史"))
         self.resize(520, 560)
         self._apply_qss()
 
@@ -60,9 +61,9 @@ class HistoryDialog(QDialog):
         layout.setSpacing(8)
 
         self._filter = QLineEdit(objectName="history_filter")
-        self._filter.setPlaceholderText("输入片段筛选查过的词")
+        self._filter.setPlaceholderText(_("输入片段筛选查过的词"))
         self._filter.setClearButtonEnabled(True)
-        self._filter.setToolTip("只显示包含这段文字的记录（不区分大小写）")
+        self._filter.setToolTip(_("只显示包含这段文字的记录（不区分大小写）"))
         self._filter.textChanged.connect(self.refresh)
         self._filter.returnPressed.connect(self._lookup_first)
         layout.addWidget(self._filter)
@@ -80,22 +81,22 @@ class HistoryDialog(QDialog):
         layout.addWidget(self._list, stretch=1)
 
         btns = QHBoxLayout()
-        self._btn_lookup = QPushButton("查词")
-        self._btn_lookup.setToolTip("查询选中的记录（也可直接双击）")
+        self._btn_lookup = QPushButton(_("查词"))
+        self._btn_lookup.setToolTip(_("查询选中的记录（也可直接双击）"))
         self._btn_lookup.clicked.connect(self._lookup_selected)
         btns.addWidget(self._btn_lookup)
-        self._btn_copy = QPushButton("复制")
+        self._btn_copy = QPushButton(_("复制"))
         self._btn_copy.clicked.connect(self._copy_selected)
         btns.addWidget(self._btn_copy)
-        self._btn_delete = QPushButton("删除")
-        self._btn_delete.setToolTip("从历史中移除选中的记录")
+        self._btn_delete = QPushButton(_("删除"))
+        self._btn_delete.setToolTip(_("从历史中移除选中的记录"))
         self._btn_delete.clicked.connect(self._delete_selected)
         btns.addWidget(self._btn_delete)
-        self._btn_clear = QPushButton("清空历史")
+        self._btn_clear = QPushButton(_("清空历史"))
         self._btn_clear.clicked.connect(self._clear_all)
         btns.addWidget(self._btn_clear)
         btns.addStretch(1)
-        self._btn_close = QPushButton("关闭")
+        self._btn_close = QPushButton(_("关闭"))
         self._btn_close.clicked.connect(self.close)
         btns.addWidget(self._btn_close)
         layout.addLayout(btns)
@@ -108,14 +109,14 @@ class HistoryDialog(QDialog):
         for word, queried_at, times in rows:
             item = QListWidgetItem(display_text(word, queried_at, times))
             item.setData(Qt.ItemDataRole.UserRole, word)
-            item.setToolTip(f"{word} · 查过 {times} 次")
+            item.setToolTip(_("{} · 查过 {} 次").format(word, times))
             self._list.addItem(item)
 
         total = self._history.count()
         if keyword:
-            text = (f"匹配 {len(rows)} 条（共 {total} 条） · 双击查词")
+            text = _("匹配 {} 条（共 {} 条） · 双击查词").format(len(rows), total)
         else:
-            text = f"共 {total} 条查询记录 · 双击查词"
+            text = _("共 {} 条查询记录 · 双击查词").format(total)
         self._count_label.setText(text)
 
         has_item = bool(rows)
@@ -160,11 +161,12 @@ class HistoryDialog(QDialog):
         words = self._selected_words()
         if not words:
             QMessageBox.information(
-                self, "删除记录", "请先选择要删除的记录（可按住 Ctrl / Shift 多选）。")
+                self, _("删除记录"),
+                _("请先选择要删除的记录（可按住 Ctrl / Shift 多选）。"))
             return
         btn = QMessageBox.question(
-            self, "删除记录",
-            f"确定从查询历史中删除选中的 {len(words)} 条记录？",
+            self, _("删除记录"),
+            _("确定从查询历史中删除选中的 {} 条记录？").format(len(words)),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -176,8 +178,8 @@ class HistoryDialog(QDialog):
 
     def _clear_all(self):
         btn = QMessageBox.question(
-            self, "清空历史",
-            "确定清空全部查询历史？\n（只清除这里的记录，不影响生词本和词库）",
+            self, _("清空历史"),
+            _("确定清空全部查询历史？\n（只清除这里的记录，不影响生词本和词库）"),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -191,11 +193,11 @@ class HistoryDialog(QDialog):
         if item is None:
             return
         menu = QMenu(self)
-        act_lookup = menu.addAction("查词")
-        act_copy = menu.addAction("复制")
+        act_lookup = menu.addAction(_("查词"))
+        act_copy = menu.addAction(_("复制"))
         menu.addSeparator()
-        act_delete = menu.addAction("删除这条记录")
-        act_clear = menu.addAction("清空历史")
+        act_delete = menu.addAction(_("删除这条记录"))
+        act_clear = menu.addAction(_("清空历史"))
         chosen = menu.exec(self._list.viewport().mapToGlobal(pos))
         if chosen is act_lookup:
             self._on_double_clicked(item)
