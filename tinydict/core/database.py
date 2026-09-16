@@ -15,6 +15,7 @@
 （threading.local），并开启 WAL 模式以支持读写并发。
 """
 
+import os
 import sqlite3
 import threading
 import time
@@ -125,7 +126,64 @@ class Database:
     def __init__(self, path):
         self._path = str(path)
         self._local = threading.local()
+        try:
+            self._init_schema()
+        except sqlite3.Error:
+            # 打不开就自愈，绝不让「数据库异常」变成「软件启动不了」
+            self._recover()
+
+    # ---------------------------------------------------------------- 自愈
+    def _recover(self):
+        """打开 / 初始化失败后的自愈流程。
+
+        常见诱因：进程被强杀（或崩溃）时 -wal / -shm 残留损坏，此后无论
+        只读还是读写都报 disk I/O error，而主库文件本身是完好的。
+
+        策略（由轻到重，尽量保住数据）：
+        1. 隔离损坏的 -wal / -shm 后重试一次；
+        2. 仍失败才把整个库改名隔离、重建空库。
+        """
+        self._drop_local_conn()
+        if self._quarantine_wal_files():
+            try:
+                self._init_schema()
+                return
+            except sqlite3.Error:
+                pass
+        self._drop_local_conn()
+        self._quarantine_db()
         self._init_schema()
+
+    def _drop_local_conn(self):
+        """丢弃当前线程缓存的连接（自愈时必须重开，不能复用坏连接）。"""
+        c = getattr(self._local, "conn", None)
+        if c is not None:
+            try:
+                c.close()
+            except sqlite3.Error:
+                pass
+        self._local.conn = None
+
+    def _quarantine_wal_files(self) -> bool:
+        """把 -wal / -shm 改名隔离；只要成功挪走任意一个就返回 True。"""
+        moved = False
+        for suffix in ("-wal", "-shm"):
+            p = self._path + suffix
+            if os.path.exists(p):
+                try:
+                    os.replace(p, p + ".corrupt")
+                    moved = True
+                except OSError:
+                    pass
+        return moved
+
+    def _quarantine_db(self):
+        """把整个数据库改名隔离，接下来 _init_schema 会新建一个空库。"""
+        if os.path.exists(self._path):
+            try:
+                os.replace(self._path, self._path + ".corrupt")
+            except OSError:
+                pass
 
     # ------------------------------------------------------------------ 连接
     def conn(self) -> sqlite3.Connection:
