@@ -37,6 +37,9 @@ config.json
 # 不进 git 仓库；GitHub 单文件上限 100MB，211MB 的 zip 会被拒）
 TinyDict-*.zip
 
+# 发布说明（仅本地撰写、复制到 GitHub Release 用，不入库）
+RELEASE_NOTE_*.md
+
 # 主题诊断工具（仅本地排错用，运行 debug_theme.bat 时生成，含运行信息）
 tinydict_theme_debug.log
 debug_theme.bat
