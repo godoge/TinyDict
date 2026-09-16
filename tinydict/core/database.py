@@ -17,6 +17,7 @@
 
 import sqlite3
 import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from typing import List, Sequence, Tuple
@@ -96,6 +97,30 @@ CREATE INDEX IF NOT EXISTS idx_history_time ON history(queried_at DESC);
 """
 
 
+def _configure_pragmas(c: sqlite3.Connection) -> None:
+    """设置连接参数。**任何失败都不能让启动崩掉**。
+
+    WAL 只是读写并发的性能优化，不是运行必需。但切换语言重启时，旧进程
+    可能还没释放数据库文件句柄，此时新进程执行 PRAGMA journal_mode=WAL
+    会抛 sqlite3.OperationalError: disk I/O error——如果这里不兜住，
+    表现就是「重启后软件直接报错起不来」。
+
+    所以：失败时重试几次（等旧进程退出），仍失败就退回 SQLite 默认的
+    日志模式继续运行，功能完全不受影响。
+    """
+    try:
+        c.execute("PRAGMA synchronous=NORMAL")
+    except sqlite3.Error:
+        pass
+    for _ in range(5):
+        try:
+            c.execute("PRAGMA journal_mode=WAL")
+            return
+        except sqlite3.Error:
+            # 旧进程可能正在退出，稍等再试
+            time.sleep(0.2)
+
+
 class Database:
     def __init__(self, path):
         self._path = str(path)
@@ -109,8 +134,7 @@ class Database:
         if c is None:
             c = sqlite3.connect(self._path, timeout=30, check_same_thread=False)
             c.row_factory = sqlite3.Row
-            c.execute("PRAGMA journal_mode=WAL")
-            c.execute("PRAGMA synchronous=NORMAL")
+            _configure_pragmas(c)
             self._local.conn = c
         return c
 

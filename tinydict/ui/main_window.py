@@ -1553,12 +1553,20 @@ class MainWindow(QMainWindow):
                 self._tray.apply_config()
             # 语言切换需要整进程重启才能完全生效（所有控件都只在启动时构建一次）。
             if str(self._config["language"]) != prev_language:
-                # 先保存当前窗口几何位置，重启后恢复
+                # 先把窗口几何位置和新语言落盘，新实例启动后读取
                 try:
                     self._save_window_state()
                 except Exception:
                     pass
+                try:
+                    self._config.save()
+                except Exception:
+                    pass
+                # 先拉起新实例，再走正常退出流程（quit_requested → 隐藏托盘
+                # 图标 + QApplication.quit）。不能直接杀进程，否则数据库句柄
+                # 不释放，新实例开库时会 disk I/O error。
                 restart_application()
+                self.quit_requested.emit()
 
     def open_about(self):
         dlg = AboutDialog(dict_summary=self._dict_summary(), parent=self)

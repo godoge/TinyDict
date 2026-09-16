@@ -443,12 +443,34 @@ def _(text: str) -> str:
 
 
 def restart_application() -> None:
-    """以相同参数重启当前进程。
+    """启动一个新的应用实例（用于切换语言后重启生效）。
 
-    用于切换语言等「需要重建全部 UI」的场景——比逐个控件重刷文本更可靠。
-    调用前请先保存窗口几何等需要持久化的状态。
+    只负责「拉起新实例」，**退出旧实例由调用方负责**——调用方应走正常退出
+    流程（MainWindow.quit_requested → 隐藏托盘图标 + QApplication.quit），
+    这样 Qt 才能正常清理、释放数据库文件句柄。
+
+    为什么不用 os.execv：Windows 上 os.execv 只是「新建进程 + 强杀当前
+    进程」的模拟实现，不会执行任何 Python 层清理（aboutToQuit 不触发、
+    数据库连接不关闭、托盘图标不隐藏）。结果是旧进程的文件句柄还没释放，
+    新进程就去开数据库并设 WAL，触发
+    sqlite3.OperationalError: disk I/O error，表现为「重启后软件起不来」。
     """
-    # 打包成 exe 后 sys.argv[0] 本身就是可执行文件路径，直接复用；
-    # 以 python 脚本方式运行时则需要把解释器补到最前面。
-    args = sys.argv if getattr(sys, "frozen", False) else [sys.executable, *sys.argv]
-    os.execv(sys.executable, args)
+    import subprocess
+
+    # 打包成 exe 后 sys.argv[0] 本身就是可执行文件路径，不能再当参数传进去；
+    # 以 python 脚本方式运行时则需要把脚本路径补到解释器后面。
+    if getattr(sys, "frozen", False):
+        args = list(sys.argv[1:])
+    else:
+        args = [os.path.abspath(sys.argv[0])] + list(sys.argv[1:])
+
+    # DETACHED_PROCESS：新实例独立于当前进程，当前进程退出不会带它一起走；
+    # close_fds=True（Windows 默认）避免继承数据库等文件句柄。
+    creationflags = 0
+    if os.name == "nt":
+        creationflags = (
+            subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        )
+
+    subprocess.Popen([sys.executable] + args,
+                     creationflags=creationflags, close_fds=True)
