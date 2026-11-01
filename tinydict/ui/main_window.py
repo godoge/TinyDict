@@ -98,7 +98,8 @@ _THEME_PROBE_JS = (
     "applyFn:typeof window.applyTheme,"
     "applyCur:typeof window.applyCurrentDarkTheme,"
     "mq:(window.matchMedia?String("
-    "window.matchMedia('(prefers-color-scheme: dark)').matches):null)"
+    "window.matchMedia('(prefers-color-scheme: dark)').matches):null),"
+    "dictDark:(document.querySelector(\"[data-theme='dark']\")?true:false)"
     "})"
 )
 
@@ -149,22 +150,49 @@ def matchmedia_shim_js() -> str:
         "(function(){"
         "if(!window.matchMedia)return;"
         "var orig=window.matchMedia.bind(window);"
-        "function fake(q,matches){return{matches:matches,media:q,onchange:null,"
-        "addListener:function(){},removeListener:function(){},"
-        "addEventListener:function(){},removeEventListener:function(){},"
-        "dispatchEvent:function(){return false;}};}"
+        # 记录每个 prefers-color-scheme 媒体查询的当前 matches 与其注册的
+        # change 监听，便于主题切换时主动触发（见 __sdFireColorScheme）。
+        "window.__sdMql=window.__sdMql||{};"
+        "function fake(q,matches){"
+        "var self={media:q,matches:matches,onchange:null,listeners:[],"
+        "addEventListener:function(t,cb){"
+        "if(t==='change'&&typeof cb==='function')self.listeners.push(cb);},"
+        "removeEventListener:function(t,cb){"
+        "if(t==='change'){var i=self.listeners.indexOf(cb);"
+        "if(i>=0)self.listeners.splice(i,1);}},"
+        "addListener:function(cb){self.addEventListener('change',cb);},"
+        "removeListener:function(cb){self.removeEventListener('change',cb);},"
+        "dispatchEvent:function(){return false;}};"
+        "return self;}"
         "window.matchMedia=function(q){"
         "var s=String(q||'');"
         "var m=s.match(/prefers-color-scheme\\s*:\\s*(dark|light)/i);"
         "if(!m)return orig(s);"
         "var want=m[1].toLowerCase();"
         "var mode=window.__sdThemeMode||'light';"
-        "if(want!==mode)return fake(s,false);"
-        # 与主题一致：仅含 prefers-color-scheme 一个条件时恒真，
-        # 还与其它条件组合（如 max-width）时交原生求值
         "var rest=s.replace(/prefers-color-scheme\\s*:\\s*(dark|light)/i,'');"
+        # 与主题一致：仅含 prefers-color-scheme 一个条件时按应用主题求值；
+        # 还与其它条件组合（如 max-width）时交原生求值。
         "if(/[\\w-]\\s*:/.test(rest))return orig(s);"
-        "return fake(s,true);"
+        "var key=s.trim();"
+        "var matches=(want===mode);"
+        "if(!window.__sdMql[key])window.__sdMql[key]=fake(key,matches);"
+        "window.__sdMql[key].matches=matches;"
+        "return window.__sdMql[key];"
+        "};"
+        # 主题切换时由 entry_theme_js 调用：重新计算各媒体查询的 matches，
+        # 并触发词库注册的 change 监听（如 OALDPEX 通过 matchMedia 的 change
+        # 事件把 data-theme 在 dark/light 间切换），让词库自带深色随应用主题
+        # 实时跟随，而不是被统一反色覆盖。
+        "window.__sdFireColorScheme=function(){"
+        "var reg=window.__sdMql;if(!reg)return;"
+        "var mode=window.__sdThemeMode||'light';"
+        "for(var q in reg){var e=reg[q];"
+        "var want=/dark/i.test(q)?'dark':'light';"
+        "var m2=(want===mode);e.matches=m2;"
+        "if(typeof e.onchange==='function'){try{e.onchange({matches:m2,media:q});}catch(_){}}"
+        "for(var i=0;i<e.listeners.length;i++){"
+        "try{e.listeners[i]({matches:m2,media:q});}catch(_){}}}"
         "};"
         "})();"
     )
@@ -205,14 +233,35 @@ def entry_theme_js() -> str:
         "}"
         "function sdPageIsDark(){"
         "try{"
-        "var d=sdIsDark(getComputedStyle("
-        "document.body||document.documentElement).backgroundColor);"
-        "if(d!==null)return d;"
-        "d=sdIsDark(getComputedStyle(document.documentElement).backgroundColor);"
-        "if(d!==null)return d;"
+        # 1) 词库自带深色的最可靠信号：显式声明了深色主题。OALDPEX 等把深色
+        #    设在内容容器的 data-theme（而非 body），仅测 body 会漏判；命中即视为深色。
+        "if(document.querySelector("
+        "'[data-theme=\"dark\"],[data-color-scheme=\"dark\"],"
+        "[data-darkreader-scheme=\"dark\"]'))return true;"
+        "var de=document.documentElement;"
+        "var deCls=de&&de.className?String(de.className).toLowerCase():'';"
+        "var bdCls=document.body&&document.body.className?"
+        "String(document.body.className).toLowerCase():'';"
+        "if(/\\b(dark|night|black)\\b/.test(deCls+bdCls))return true;"
+        # 2) 视口中心点自下而上找第一个非透明背景（用户真正看到的画布色）。
+        "var cx=Math.floor((window.innerWidth||800)/2);"
+        "var cy=Math.floor((window.innerHeight||600)/2);"
+        "var el=document.elementFromPoint(cx,cy);"
+        "while(el&&el!==document.documentElement){"
+        "var bg=sdIsDark(getComputedStyle(el).backgroundColor);"
+        "if(bg!==null)return bg;"
+        "el=el.parentElement;}"
+        "var dh=sdIsDark(getComputedStyle(de).backgroundColor);"
+        "if(dh!==null)return dh;"
+        "var db=sdIsDark(getComputedStyle(document.body).backgroundColor);"
+        "if(db!==null)return db;"
+        # 3) 背景全透明：看点中心正文色——浅色文字压在深色画布上即视为深色，
+        #    否则按浅色处理（此时画布由 Qt 提供，翻后正好白字压在深色画布上）。
+        "var te=document.elementFromPoint(cx,cy);"
+        "var tc=sdIsDark(getComputedStyle(te||document.body).color);"
+        "if(tc===true)return false;"
+        "if(tc===false)return true;"
         "}catch(e){}"
-        # 整页背景都透明 → 按浅色处理：此时画布色由 Qt 提供（已是目标明暗），
-        # 正文通常是黑色，翻转后正好变成白字压在深色画布上。
         "return false;"
         "}"
         "var last=null;var applied=false;"
@@ -223,6 +272,10 @@ def entry_theme_js() -> str:
         "if(t==='native'){"
         "if(last!=='native'){last='native';r.classList.remove('sd-invert');}"
         "return;}"
+        # 触发词库通过 matchMedia 注册的 change 监听（如 OALDPEX 据此把
+        # data-theme 在 dark/light 间切换），让词库自带深色随应用主题实时
+        # 跟随，而不是被统一反色覆盖。
+        "if(window.__sdFireColorScheme){window.__sdFireColorScheme();}"
         # 词库自带主题函数：每个文档只调用一次（force 除外）。
         # 老实现每次复查都调用，遇到 toggle 型实现会被反复翻转，
         # 最终明暗取决于调用次数的奇偶——这正是「切回某个词条后主题
