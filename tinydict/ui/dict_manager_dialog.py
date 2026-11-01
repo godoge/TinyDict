@@ -228,7 +228,10 @@ class DictManagerDialog(QDialog):
             return
         start_dir = str(Path(d.filename).parent) \
             if Path(d.filename).parent.is_dir() else ""
-        path, _ = QFileDialog.getOpenFileName(
+        # 注意：不可用 `_` 接收第二个返回值——`_` 是本模块的 i18n 翻译函数，
+        # 一旦在函数体内对 `_` 赋值，Python 会把它当成局部变量，
+        # 同函数里所有 `_("...")` 都会抛 UnboundLocalError（按钮表现为"点了没反应"）。
+        path, _sel_filter = QFileDialog.getOpenFileName(
             self, _("为「{}」选择 .mdx 文件").format(d.name),
             start_dir, "MDX 词库 (*.mdx);;所有文件 (*.*)")
         if not path:
@@ -315,7 +318,8 @@ class DictManagerDialog(QDialog):
 
     # ------------------------------------------------------------------ 添加
     def _add_files(self):
-        paths, _ = QFileDialog.getOpenFileNames(
+        # 同上：第二个返回值不能用 `_` 接收（会遮蔽 i18n 的翻译函数）。
+        paths, _sel_filter = QFileDialog.getOpenFileNames(
             self, _("选择 MDX 词库文件（可多选）"), "",
             "MDX 词库 (*.mdx);;所有文件 (*.*)")
         registered, skipped, failed = 0, 0, []
@@ -363,6 +367,13 @@ class DictManagerDialog(QDialog):
                 _("已添加 {} 部词库并开始后台加载。{}\n"
                   "加载完成后即可查询（列表「状态」列显示进度）。").format(
                     registered, skip_text))
+        elif skipped:
+            # 选中的全部是已注册过的词库：此前这里会完全静默（没有任何弹窗），
+            # 用户点完看不到任何变化，会以为"按钮点击无效"。
+            QMessageBox.information(
+                self, _("无需重复添加"),
+                _("选择的 {} 部词库已经在列表中了，无需重复添加。").format(
+                    skipped))
 
     def _reload_mounts(self):
         self._service.mount_all_async()

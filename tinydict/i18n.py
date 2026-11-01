@@ -328,6 +328,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "Ready to look up once loading finishes (the Status column shows "
             "progress).",
         "（跳过已添加 {} 部）": "({} already added skipped)",
+        "无需重复添加": "Already in the list",
+        "选择的 {} 部词库已经在列表中了，无需重复添加。":
+            "The {} dictionaries you selected are already in the list; "
+            "no need to add them again.",
         "原始 .mdx 文件找不到（可能被改名 / 移动 / 删除）":
             "Original .mdx file not found (possibly renamed/moved/deleted)",
         "⚠ 有 {} 部词库文件缺失（通常是文件夹被改名 / 移动后路径失效）：{}。\n"

@@ -1,0 +1,15 @@
+{
+  "hotkey_show_hide": "ctrl+alt+d",
+  "hotkey_capture": "ctrl+alt+q",
+  "capture_enabled": true,
+  "minimize_to_tray": true,
+  "fill_input_on_select": false,
+  "offline_mode": false,
+  "wordbook_group_id": 1,
+  "history_enabled": true,
+  "theme": "dark",
+  "entry_theme": "follow",
+  "language": "zh_CN",
+  "window_geometry": "AdnQywADAAAAAAMWAAABRQAABukAAAQLAAADFgAAAWQAAAbpAAAECwAAAAAAAAAACgAAAAMWAAABZAAABukAAAQL",
+  "splitter_state": "AAAA/wAAAAEAAAACAAAA5gAAAu4B/////wEAAAABAA=="
+}

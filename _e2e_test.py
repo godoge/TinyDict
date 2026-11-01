@@ -117,7 +117,9 @@ class StubWordbook(QObject):
     def groups(self):
         return []
 
-    def has(self, w, gid):
+    # gid 需给默认值：主窗口会单参调用 has(word) 判断"是否在任一分组"，
+    # 与真实 WordBook.has(word, group_id=None) 保持一致。
+    def has(self, w, gid=None):
         return False
 
     def groups_of(self, w):

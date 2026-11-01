@@ -1,5 +1,7 @@
 # TinyDict — Windows 桌面离线 MDX 词典
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 一款基于 MDX / MDD 格式的 **单机离线** 词典软件：
 
 - 仅本地解析 MDX / MDD 词库，**无任何联网查词功能**，运行时不发起网络请求；
@@ -228,6 +230,13 @@ TinyDict/
         ├── hotkeys.py             # 全局快捷键（keyboard 库）
         └── capture.py             # 屏幕划词取词
 ```
+
+---
+
+## 开源协议
+
+本项目基于 [MIT License](LICENSE) 开源。你可以自由地使用、修改、再分发本软件，
+包括商业用途，只需保留原始版权与许可声明即可。
 
 ---
 
