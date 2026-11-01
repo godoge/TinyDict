@@ -43,6 +43,8 @@ RELEASE_NOTE_*.md
 # 主题诊断工具（仅本地排错用，运行 debug_theme.bat 时生成，含运行信息）
 tinydict_theme_debug.log
 debug_theme.bat
+# 本地推送辅助脚本（含个人远程/代理配置，不入库）
+push.bat
 # Windows 保留名残留文件（无法删除，仅作噪音隔离）
 nul
 
