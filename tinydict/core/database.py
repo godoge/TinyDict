@@ -423,43 +423,47 @@ class Database:
         c.commit()
 
     # ------------------------------------------------------------------ 生词本
-    def wordbook_add(self, word: str, group_id: int = None) -> bool:
+    def wordbook_add(self, word: str, group_id: int = None,
+                     added_at: str = None) -> bool:
         """把生词加入生词本并归入 group_id（默认分组）。
+
+        added_at 由导入备份 / CSV 时传入（ISO 8601 秒级字符串），None 表示用
+        当前时间；表里已有这个词时 INSERT OR IGNORE 不会覆盖它原有的时间。
 
         返回 True 表示「新加入了该分组」；词已在生词本中但不在该分组时同样
         返回 True（多分组模型下，加入新分组是有意义的操作）。
         """
-        gid = group_id if group_id else DEFAULT_GROUP_ID
-        now = datetime.now().isoformat(timespec="seconds")
-        c = self.conn()
-        c.execute(
-            "INSERT OR IGNORE INTO wordbook(word, added_at) VALUES(?,?)",
-            (word, now))
-        cur = c.execute(
-            "INSERT OR IGNORE INTO wordbook_tags(word, group_id, added_at)"
-            " VALUES(?,?,?)", (word, gid, now))
-        c.commit()
-        return cur.rowcount > 0
+        return self.wordbook_add_rows([(word, added_at or "")], group_id) > 0
 
-    def wordbook_add_words(self, words: Sequence[str], group_id: int) -> int:
-        """批量加入分组，返回新增的关联条数（已在该分组的跳过）。"""
+    def wordbook_add_rows(self, rows: Sequence[Tuple[str, str]],
+                          group_id: int) -> int:
+        """批量把 ``(生词, 加入时间)`` 加入同一分组，返回新增的关联条数。
+
+        每行用自己的时间：从 CSV 导入时可以保留文件里记录的收藏时间，而不是
+        全部改成「导入那一刻」。时间为空的行回退到当前时间；整批只提交一次。
+        """
         gid = group_id if group_id else DEFAULT_GROUP_ID
         now = datetime.now().isoformat(timespec="seconds")
         c = self.conn()
         added = 0
-        for raw in words:
-            word = (raw or "").strip()
+        for raw_word, raw_time in rows:
+            word = (raw_word or "").strip()
             if not word:
                 continue
+            stamp = (raw_time or "").strip() or now
             c.execute(
                 "INSERT OR IGNORE INTO wordbook(word, added_at) VALUES(?,?)",
-                (word, now))
+                (word, stamp))
             cur = c.execute(
                 "INSERT OR IGNORE INTO wordbook_tags(word, group_id, added_at)"
-                " VALUES(?,?,?)", (word, gid, now))
+                " VALUES(?,?,?)", (word, gid, stamp))
             added += cur.rowcount
         c.commit()
         return added
+
+    def wordbook_add_words(self, words: Sequence[str], group_id: int) -> int:
+        """批量加入分组，返回新增的关联条数（已在该分组的跳过）。"""
+        return self.wordbook_add_rows([(w, "") for w in words], group_id)
 
     def wordbook_remove(self, word: str) -> bool:
         """从生词本彻底删除（含全部分组关联）。"""
@@ -568,24 +572,36 @@ class Database:
         return [(r[0], r[1] or "") for r in rows]
 
     def wordbook_export(
-            self, group_id: int = ALL_GROUPS) -> List[Tuple[str, str, List[str]]]:
-        """导出用：[(word, added_at, [所属分组名…])]，顺序同 wordbook_list。
+            self, group_id: int = ALL_GROUPS
+    ) -> List[Tuple[str, str, List[str], List[str]]]:
+        """导出用：``[(word, added_at, [分组名…], [各分组时间…])]``。
 
-        分组归属用一条查询一次性取回后在内存里拼装，避免逐词查库
-        （生词上千时逐词查询会明显变慢）。
+        后两个列表一一对应：``wordbook_tags.added_at`` 记的是这个词加进
+        **该分组**的时间，与 Android ``word_book_ref.addedAt`` 同语义。
+        选了某一分组时，导出的是这一组的词，但它在别的分组里的归属和时间
+        也要一起带出去，否则导入后会丢分组（与 Android 的 EXISTS 筛选一致）。
+
+        分组归属和时间用一条查询取全后在内存里拼装，避免逐词查库。
         """
         rows = self.wordbook_list(group_id)
         if not rows:
             return []
         tagged = self.conn().execute(
-            "SELECT t.word, g.name FROM wordbook_tags t"
+            "SELECT t.word, g.name, COALESCE(t.added_at, '')"
+            " FROM wordbook_tags t"
             " JOIN wordbook_groups g ON g.id=t.group_id"
             " ORDER BY g.sort_order, g.id"
         ).fetchall()
         by_word: dict = {}
-        for word, name in tagged:
-            by_word.setdefault(word, []).append(name)
-        return [(w, a, by_word.get(w, [])) for w, a in rows]
+        for word, name, stamp in tagged:
+            entry = by_word.setdefault(word, ([], []))
+            entry[0].append(name)
+            entry[1].append(stamp)
+        out = []
+        for w, a in rows:
+            names, times = by_word.get(w, ([], []))
+            out.append((w, a, names, times))
+        return out
 
     def wordbook_stats(self) -> dict:
         """一次性取回界面需要的计数：{'all':n, 'groups':{id:n}}。"""

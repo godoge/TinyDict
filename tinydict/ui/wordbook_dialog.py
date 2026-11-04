@@ -24,13 +24,24 @@ from ..core.wordbook import (
 )
 from ..i18n import _
 from . import theme as _theme
+from .export_dialog import ExportOptionsDialog
 
-#: 导出 / 导入的文件类型过滤器。格式由用户在这里选（或由后缀推断）。
-_EXPORT_FILTER = ("CSV 表格（含分组与时间） (*.csv);;"
-                  "纯文本（每行一个词） (*.txt);;"
-                  "JSON 完整备份（含分组结构） (*.json)")
+#: 导入的文件类型过滤器。
 _IMPORT_FILTER = ("生词文件 (*.txt *.csv *.json);;CSV 表格 (*.csv);;"
                   "纯文本 (*.txt);;JSON 备份 (*.json);;所有文件 (*.*)")
+
+
+def _export_filter(ext: str) -> str:
+    """保存对话框只给所选格式一种过滤器。
+
+    格式已经在导出选项对话框里选定了，这里再摆三个过滤器只会让两处选择
+    打架；写成函数而不是模块级常量，语言切换后才会用上新译文。
+    """
+    if ext == "txt":
+        return _("纯文本（每行一个词） (*.txt)")
+    if ext == "json":
+        return _("JSON 完整备份（含分组结构） (*.json)")
+    return _("CSV 表格（含分组与各分组收藏时间） (*.csv)")
 
 #: 分组项的「名称」（不带计数后缀）存在 UserRole+1，便于跨语言正确取分组名。
 _NAME_ROLE = Qt.ItemDataRole.UserRole + 1
@@ -167,7 +178,7 @@ class WordbookDialog(QDialog):
         btns.addWidget(self._btn_import)
         self._btn_export = QPushButton(_("导出…"))
         self._btn_export.setToolTip(_(
-            "导出当前分组的生词；选 json 则导出含分组结构的完整备份"))
+            "先选要导出的生词本和导出格式（默认全部生词本 / CSV）"))
         self._btn_export.clicked.connect(self._export_words)
         btns.addWidget(self._btn_export)
         self._btn_close = QPushButton(_("关闭"))
@@ -521,38 +532,63 @@ class WordbookDialog(QDialog):
             f.write(text)
 
     @staticmethod
-    def _ext_from_filter(selected: str) -> str:
-        """文件名没写后缀时，按用户在对话框里选的过滤器判断格式。"""
-        for ext in ("csv", "txt", "json"):
-            if f"*.{ext}" in (selected or ""):
-                return ext
-        return ""
-
-    @staticmethod
     def _safe_name(name: str) -> str:
         """去掉文件名里不能用的字符（分组名是用户随便起的）。"""
         for ch in '\\/:*?"<>|':
             name = name.replace(ch, "_")
         return name.strip() or "生词本"
 
+    def _ask_export_options(self):
+        """导出第一步：选生词本范围 + 格式。取消返回 None。
+
+        单独拆成方法，界面测试可以直接替换它，不必进对话框的事件循环。
+        """
+        stats = self._wordbook.stats()
+        items = [(g.id, g.name, stats["groups"].get(g.id, 0))
+                 for g in self._wordbook.groups()]
+        dlg = ExportOptionsDialog(
+            items, config=self._config,
+            theme_manager=self._theme_manager, parent=self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return None
+        return dlg.selected_group_ids, dlg.format
+
     def _export_words(self):
-        rows = self._wordbook.export_rows(self._current_group)
+        choice = self._ask_export_options()
+        if choice is None:
+            return
+        group_ids, ext = choice
+
+        # group_ids=None 时就是原来的「全部」，数据逐字节不变；选了具体分组
+        # 时，行里的 groups/group_added_at 也已收敛到那些分组，所以三种格式
+        # 都直接用这份 rows，不再像旧版 JSON 那样另取全库。
+        rows = self._wordbook.export_rows(ALL_GROUPS, group_ids=group_ids)
         if not rows:
             QMessageBox.information(
-                self, _("导出"), _("当前分组没有可导出的生词。"))
+                self, _("导出"), _("所选生词本里没有可导出的生词。"))
             return
 
+        wanted = None if group_ids is None else set(group_ids)
+        groups = [g for g in self._wordbook.groups()
+                  if wanted is None or g.id in wanted]
+        if wanted is None:
+            scope = _("全部")
+        elif len(groups) == 1:
+            scope = groups[0].name
+        else:
+            scope = _("{} 等 {} 个分组").format(
+                groups[0].name if groups else "", len(groups))
         stamp = datetime.now().strftime("%Y%m%d")
-        group = self._safe_name(self._current_group_name())
-        default = f"TinyDict-{group}-{stamp}.csv"
-        path, chosen = QFileDialog.getSaveFileName(
-            self, _("导出生词本"), default, _EXPORT_FILTER)
+        default = f"TinyDict-{self._safe_name(scope)}-{stamp}.{ext}"
+
+        path, _chosen = QFileDialog.getSaveFileName(
+            self, _("导出生词本"), default, _export_filter(ext))
         if not path:
             return
-
-        ext = _io.ext_of(path) or self._ext_from_filter(chosen) or "csv"
+        # 格式已在上一步选定，手输的其它后缀统一纠正，避免「文件名 .json
+        # 里装的却是 CSV 内容」这种错位。
         if _io.ext_of(path) != ext:
-            path = f"{path}.{ext}"
+            path = f"{os.path.splitext(path)[0]}.{ext}"
 
         try:
             if ext == "txt":
@@ -561,15 +597,12 @@ class WordbookDialog(QDialog):
                 # utf-8-sig：带 BOM，Excel 双击打开不乱码
                 self._write_text(path, _io.dump_csv(rows), "utf-8-sig")
             else:
-                # 备份不看当前分组，始终导出全部分组与归属
-                all_rows = self._wordbook.export_rows(ALL_GROUPS)
-                groups = [g.name for g in self._wordbook.groups()]
+                # 顶层 groups 只写所选分组，所以连没有生词的空分组也能保留
                 self._write_text(
                     path,
-                    _io.dump_json(all_rows, groups,
+                    _io.dump_json(rows, [g.name for g in groups],
                                   datetime.now().isoformat(timespec="seconds")),
                     "utf-8")
-                rows = all_rows
         except OSError as e:
             QMessageBox.warning(
                 self, _("导出失败"), _("写入文件失败：\n{}").format(e))
@@ -593,22 +626,70 @@ class WordbookDialog(QDialog):
                 self, _("导入失败"), _("读取文件失败：\n{}").format(e))
             return
 
-        if _io.ext_of(path) == "json":
+        # 只认扩展名不够：用户把 JSON 另存为 .txt、或转发时丢了后缀，
+        # 它会被当词表逐行导入成一堆垃圾词（与 Android 的分流规则一致）。
+        if _io.is_backup(text, path):
             self._import_backup(text)
             return
 
-        words = _io.parse_words(text)
-        if not words:
+        rows = _io.parse_rows(text)
+        if not rows:
             QMessageBox.information(
                 self, _("导入"),
                 _("没有从「{}」读到生词。\n"
-                  "纯文本 / CSV 里每行写一个词即可（CSV 取第一列）。").format(
+                  "纯文本每行写一个词；带表头的 CSV 会按原分组还原。").format(
                     os.path.basename(path)))
             return
-        self._import_plain(words, os.path.basename(path))
+        if any(row["groups"] for row in rows):
+            # 文件里写了分组：按原名还原，不再让用户挑一个分组把归属抹平
+            self._import_rows(rows)
+        else:
+            self._import_plain([row["word"] for row in rows],
+                               os.path.basename(path),
+                               [row["added_at"] for row in rows])
 
-    def _import_plain(self, words: list, filename: str):
-        """把读到的词表导入用户指定的分组（分组由弹出的菜单选择）。"""
+    def _import_rows(self, rows: list):
+        """带归属的 CSV：按文件里的分组名还原，并保留各分组各自的收藏时间。"""
+        names: list = []
+        for row in rows:
+            for name in row["groups"]:
+                if name not in names:
+                    names.append(name)
+        attributed = sum(1 for row in rows if row["groups"])
+        plain = len(rows) - attributed
+        default_name = (self._wordbook.group_name(DEFAULT_GROUP_ID)
+                        or "默认分组")
+        shown = "、".join(names[:5])
+        if len(names) > 5:
+            shown = _("{} 等 {} 个").format(shown, len(names))
+        extra = (_("\n另有 {} 个词没写分组，将放入「{}」。").format(
+            plain, default_name) if plain else "")
+        btn = QMessageBox.question(
+            self, _("导入 {} 个生词").format(len(rows)),
+            _("文件里记录了 {} 个生词的分组：{}。\n"
+              "这些词会回到原来的分组，并保留各自的收藏时间；"
+              "本机没有的同名分组会自动新建。{}\n"
+              "与现有数据合并，不会删除任何已有的分组或生词。").format(
+                attributed, shown, extra),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes)
+        if btn != QMessageBox.StandardButton.Yes:
+            return
+        stat = self._wordbook.restore_rows(rows)
+        self._note = _("已导入备份：新增 {} 个生词、"
+                       "{} 条分组归属、{} 个分组").format(
+                           stat['words'], stat['tags'], stat['groups'])
+        self.refresh()
+        self.groupsChanged.emit()
+        self.wordsChanged.emit()
+
+    def _import_plain(self, words: list, filename: str,
+                      added_times: list = None):
+        """把读到的词表导入用户指定的分组（分组由弹出的菜单选择）。
+
+        文件里如果写了词级收藏时间（旧 CSV 的 added_at 列），一并还原，
+        而不是全部记成「导入那一刻」。
+        """
         menu = QMenu(self)
         actions = {}
         for g in self._wordbook.groups():
@@ -636,7 +717,11 @@ class WordbookDialog(QDialog):
         else:
             gid, gname = actions[chosen], chosen.text()
 
-        added = self._wordbook.add_words(words, gid)
+        if added_times and any((t or "").strip() for t in added_times):
+            added = self._wordbook.add_words_with_times(
+                list(zip(words, added_times)), gid)
+        else:
+            added = self._wordbook.add_words(words, gid)
         dup = len(words) - added
         self._note = (_("已从 {} 导入 {} 个生词到「{}」{}").format(
             filename, added, gname,
@@ -658,7 +743,8 @@ class WordbookDialog(QDialog):
         btn = QMessageBox.question(
             self, _("导入备份"),
             _("备份包含 {} 个生词、{} 个分组。\n"
-              "将合并到现有生词本：缺少的分组自动新建，重复的词跳过。").format(
+              "记录了每个词的归属与各分组各自的收藏时间，将按原名还原；\n"
+              "与现有数据合并，不会删除任何已有的分组或生词。").format(
                 len(words), len(payload['groups'])),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.Yes)

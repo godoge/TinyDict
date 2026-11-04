@@ -17,6 +17,7 @@ from typing import List, Optional, Sequence, Tuple
 from .database import (
     ALL_GROUPS, DEFAULT_GROUP_ID, Database, WordGroup,
 )
+from .wordbook_io import align_group_times, normalize_added_at
 
 __all__ = [
     "WordBook", "WordGroup",
@@ -71,16 +72,31 @@ class WordBook:
         return DEFAULT_GROUP_ID
 
     # ------------------------------------------------------------------ 生词
-    def add(self, word: str, group_id: int = None) -> bool:
-        """加入生词本并归入 group_id（默认分组）。返回是否新加入了该分组。"""
+    def add(self, word: str, group_id: int = None,
+            added_at: str = None) -> bool:
+        """加入生词本并归入 group_id（默认分组）。返回是否新加入了该分组。
+
+        added_at 供导入备份 / CSV 时还原原收藏时间，None 表示「就是现在」。
+        """
         word = (word or "").strip()
         if not word:
             return False
-        return self._db.wordbook_add(word, group_id)
+        return self._db.wordbook_add(word, group_id, added_at)
 
     def add_words(self, words: Sequence[str], group_id: int) -> int:
         """批量把生词加入分组，返回新增的关联条数。"""
         return self._db.wordbook_add_words(words, group_id)
+
+    def add_words_with_times(self, rows: Sequence[Tuple[str, str]],
+                             group_id: int) -> int:
+        """批量加入分组并保留文件里记录的时间；``rows`` 是 ``(词, 时间)`` 列表。
+
+        用于「CSV 里写了 added_at、但没写 groups」的旧文件：仍然按用户选的
+        分组导入，但收藏时间不再是导入那一刻。
+        """
+        clean = [(word, normalize_added_at(stamp))
+                 for word, stamp in rows]
+        return self._db.wordbook_add_rows(clean, group_id)
 
     def remove(self, word: str) -> bool:
         """从生词本彻底删除（含全部分组关联）。"""
@@ -111,15 +127,58 @@ class WordBook:
 
     def export_rows(
             self,
-            group_id: int = ALL_GROUPS) -> List[Tuple[str, str, List[str]]]:
-        """导出用：[(word, added_at, [所属分组名…])]。"""
-        return self._db.wordbook_export(group_id)
+            group_id: int = ALL_GROUPS,
+            group_ids: Optional[Sequence[int]] = None,
+    ) -> List[Tuple[str, str, List[str], List[str]]]:
+        """导出用：``[(word, added_at, [分组名…], [各分组时间…])]``。
+
+        后两个列表一一对应，格式与 Android ``ExportRow`` 完全一致。
+
+        ``group_ids`` 传了具体分组时按「只导出这些生词本」处理：以全部生词
+        为基准，丢掉不属于任何所选分组的词，并把每行剩下的归属与时间收敛到
+        所选分组。这样文件导入回任意一端都只会建出所选分组，不会把没选的
+        分组一起带回来。``None`` 时完全走旧路径（逐字节兼容 Android）。
+        """
+        if group_ids is None:
+            return self._db.wordbook_export(group_id)
+        wanted_ids = set(group_ids)
+        names = {g.name for g in self.groups() if g.id in wanted_ids}
+        out: List[Tuple[str, str, List[str], List[str]]] = []
+        for word, added, gs, times in self._db.wordbook_export(ALL_GROUPS):
+            aligned = align_group_times(gs, times, added)
+            pairs = [(n, t) for n, t in zip(gs, aligned) if n in names]
+            if not pairs:
+                continue
+            out.append((word, added,
+                        [n for n, _ in pairs], [t for _, t in pairs]))
+        return out
 
     def restore(self, payload: dict) -> dict:
         """从 JSON 备份合并恢复（不覆盖、不删除现有数据）。
 
-        payload 为 wordbook_io.parse_backup 的结果。缺少的分组自动新建，
-        已存在的词跳过（只补它还没有的分组归属）。
+        payload 为 ``wordbook_io.parse_backup()`` 的结果。缺少的分组自动新建
+        （顶层清单里没有词的空分组也会保留），已存在的词只补它还没有的归属，
+        **每个分组各自的收藏时间**都会还原。
+        """
+        return self._restore(payload.get("groups") or [],
+                             payload.get("words") or [])
+
+    def restore_rows(self, rows: Sequence[dict]) -> dict:
+        """从带归属的 CSV 行合并恢复，走与 JSON 备份完全相同的还原逻辑。
+
+        ``rows`` 为 ``wordbook_io.parse_rows()`` 的结果。CSV 是扁平表，没有
+        顶层分组清单，所以从各行里按顺序收集出分组名（含空归属行的兜底）。
+        """
+        groups: List[str] = []
+        for row in rows:
+            for name in row.get("groups") or []:
+                if name and name not in groups:
+                    groups.append(name)
+        return self._restore(groups, rows)
+
+    def _restore(self, group_names: Sequence[str],
+                 items: Sequence[dict]) -> dict:
+        """CSV / JSON 共用的恢复实现：建分组、按名还原、按分组写时间。
 
         返回 {'words': 新增生词数, 'tags': 新增分组归属数, 'groups': 新建分组数}
         """
@@ -138,26 +197,37 @@ class WordBook:
             new_groups += 1
             return g.id
 
-        for name in (payload.get("groups") or []):
+        for name in group_names:
             if name:
                 _group_id(name)
 
+        default_name = self.group_name(DEFAULT_GROUP_ID) or "默认分组"
         new_words = 0
         new_tags = 0
-        for item in (payload.get("words") or []):
+        for item in items:
             word = (item.get("word") or "").strip()
             if not word:
                 continue
             existed = self._db.wordbook_has(word)
             names = [n for n in (item.get("groups") or []) if n]
+            added_at = normalize_added_at(item.get("added_at") or "")
+            times = align_group_times(
+                names, item.get("group_added_at") or [], added_at)
             if not names:
-                # 备份里没写分组（老备份）：归入默认分组，不允许无归属
-                names = [self.group_name(DEFAULT_GROUP_ID) or "默认分组"]
-            for name in names:
+                # 文件里没写分组（老备份 / 手写的 CSV）：归入默认分组，
+                # 不允许出现无归属的词（数据层不变量）。
+                names = [default_name]
+                times = [added_at]
+            seen = set()
+            for i, name in enumerate(names):
+                if name in seen:                # 同名分组只插一次，保留首次的时间
+                    continue
+                seen.add(name)
                 gid = _group_id(name)
                 if gid is None:
                     continue
-                if self._db.wordbook_add(word, gid):
+                stamp = normalize_added_at(times[i]) or added_at
+                if self._db.wordbook_add(word, gid, stamp or None):
                     new_tags += 1
             if not existed:
                 new_words += 1

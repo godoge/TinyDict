@@ -178,9 +178,35 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "从 txt / csv 导入生词，或从 json 备份恢复":
             "Import words from txt / csv, or restore from a json backup",
         "导出…": "Export…",
-        "导出当前分组的生词；选 json 则导出含分组结构的完整备份":
-            "Export words of the current group; choosing json exports a full "
-            "backup including group structure",
+        "先选要导出的生词本和导出格式（默认全部生词本 / CSV）":
+            "Choose which wordbooks to export and the format "
+            "(all wordbooks / CSV by default)",
+        # ---- 导出选项对话框（范围 + 格式）
+        "导出哪些生词本：": "Wordbooks to export:",
+        "全部生词本（默认）": "All wordbooks (default)",
+        "全不选": "Select none",
+        "导出格式：": "Export format:",
+        "CSV 表格（推荐）": "CSV spreadsheet (recommended)",
+        "纯文本（每行一个词）": "Plain text (one word per line)",
+        "JSON 完整备份": "JSON full backup",
+        "含分组与各分组收藏时间，Excel 可直接打开。":
+            "Includes groups and per-group timestamps; opens directly in "
+            "Excel.",
+        "每行一个词，不含分组与收藏时间，适合纯词表。":
+            "One word per line, without groups or timestamps; "
+            "good for a plain word list.",
+        "完整备份：保留分组结构（含空分组）与各分组收藏时间。":
+            "Full backup: keeps the group structure (including empty groups) "
+            "and per-group timestamps.",
+        "所选生词本里没有可导出的生词。":
+            "The selected wordbooks have no words to export.",
+        "{} 等 {} 个分组": "{} etc. ({} groups)",
+        "CSV 表格（含分组与各分组收藏时间） (*.csv)":
+            "CSV spreadsheet (groups and per-group timestamps) (*.csv)",
+        "纯文本（每行一个词） (*.txt)":
+            "Plain text (one word per line) (*.txt)",
+        "JSON 完整备份（含分组结构） (*.json)":
+            "JSON full backup (includes group structure) (*.json)",
         "关闭": "Close",
         "全部（{}）": "All ({})",
         "「{}」共 {} 个生词 · 双击查词": "“{}” has {} words · double-click to look up",
@@ -246,18 +272,34 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "导入失败": "Import failed",
         "读取文件失败：\n{}": "Failed to read file:\n{}",
         "导入": "Import",
-        "没有从「{}」读到生词。\n纯文本 / CSV 里每行写一个词即可"
-        "（CSV 取第一列）。":
+        "没有从「{}」读到生词。\n"
+        "纯文本每行写一个词；带表头的 CSV 会按原分组还原。":
             "No words were read from “{}”.\n"
-            "In plain text / CSV, put one word per line (CSV uses the first "
-            "column).",
+            "Plain text: one word per line; a CSV with a header is restored "
+            "into its original groups.",
         "备份文件里没有生词。": "The backup file contains no words.",
         "导入备份": "Import backup",
-        "备份包含 {} 个生词、{} 个分组。\n将合并到现有生词本："
-        "缺少的分组自动新建，重复的词跳过。":
+        "备份包含 {} 个生词、{} 个分组。\n"
+        "记录了每个词的归属与各分组各自的收藏时间，将按原名还原；\n"
+        "与现有数据合并，不会删除任何已有的分组或生词。":
             "Backup contains {} words and {} groups.\n"
-            "It will be merged into the existing wordbook: missing groups are "
-            "created, duplicate words skipped.",
+            "It records each word's groups and the added time in each group, "
+            "and restores them by name.\n"
+            "This merges with existing data and never deletes any group or "
+            "word.",
+        "导入 {} 个生词": "Import {} words",
+        "{} 等 {} 个": "{} etc. ({} groups)",
+        "\n另有 {} 个词没写分组，将放入「{}」。":
+            "\n{} words have no group and will go into “{}”.",
+        "文件里记录了 {} 个生词的分组：{}。\n"
+        "这些词会回到原来的分组，并保留各自的收藏时间；"
+        "本机没有的同名分组会自动新建。{}\n"
+        "与现有数据合并，不会删除任何已有的分组或生词。":
+            "The file records groups for {} words: {}.\n"
+            "These words go back to their original groups with their own "
+            "added times; groups missing here are created automatically.{}\n"
+            "This merges with existing data and never deletes any group or "
+            "word.",
         "已导入备份：新增 {} 个生词、{} 条分组归属、{} 个分组":
             "Imported backup: {} new words, {} group links, {} groups",
         "已从 {} 导入 {} 个生词到「{}」{}":
