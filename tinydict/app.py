@@ -1,6 +1,6 @@
 """应用组装层：主窗口 / 系统托盘 / 全局快捷键 / 划词取词的生命周期与信号接线。"""
 
-from PySide6.QtCore import QObject
+from PySide6.QtCore import QObject, QTimer
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from . import __version__
@@ -77,8 +77,14 @@ class TrayController(QObject):
 
 
 class TinyDictApp:
-    def __init__(self, qapp: QApplication):
+    def __init__(self, qapp: QApplication, on_first_idle=None):
+        """组装应用。
+
+        :param on_first_idle: 主窗口绘制完成后、后台初始化之前调用的回调，
+            由入口用来关闭 PyInstaller 启动画面（源码运行时传 None 亦可）。
+        """
         self.qapp = qapp
+        self._first_idle_cb = on_first_idle
         # 应用级图标：同时驱动主窗口标题栏与 Windows 任务栏图标。
         # 托盘图标在 TrayController 中单独设置，此处不必重复。
         self.qapp.setWindowIcon(app_icon())
@@ -111,6 +117,22 @@ class TinyDictApp:
 
         self._wire()
         self.window.show()
+        # 事件循环第一轮：主窗口已完成首次绘制。先关启动画面让用户看到界面，
+        # 再延后执行全局快捷键注册（import keyboard 会起低级键盘钩子）与
+        # 词库后台挂载——这些都会占用主线程，放到首帧之后才不拖慢启动体感。
+        QTimer.singleShot(0, self._on_first_idle)
+
+    def _on_first_idle(self):
+        # 先关闭启动画面（仅打包版有效），再把重活排到下一轮，避免它挤占
+        # 首帧绘制之后的这一轮事件循环。
+        if self._first_idle_cb is not None:
+            try:
+                self._first_idle_cb()
+            except Exception:  # 关闭启动画面失败不应影响启动
+                pass
+        QTimer.singleShot(0, self._deferred_startup)
+
+    def _deferred_startup(self):
         self.hotkeys.rebind()
         # 后台挂载全部启用词库（key 索引，带本地缓存）
         self.service.mount_all_async()
