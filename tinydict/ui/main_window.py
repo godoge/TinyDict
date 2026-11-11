@@ -739,6 +739,18 @@ class EntryView(QWebEngineView):
 # ----------------------------------------------------------------------
 
 
+class _StayOpenMenu(QMenu):
+    """下拉菜单：点击「可勾选」项时不自动关闭，便于一次性勾选多个分组；
+    非勾选项（如「新建分组…」）仍按默认行为触发并关闭。"""
+
+    def mouseReleaseEvent(self, event):
+        action = self.actionAt(event.pos())
+        if action is not None and action.isCheckable():
+            action.trigger()   # 自行切换勾选状态并发出 triggered
+            return             # 拦截默认行为，阻止菜单关闭
+        super().mouseReleaseEvent(event)
+
+
 class MainWindow(QMainWindow):
     settings_saved = Signal()      # 设置已保存（app 层据此重绑快捷键）
     wordbook_changed = Signal()    # 生词本内容变化
@@ -942,7 +954,7 @@ class MainWindow(QMainWindow):
         self._btn_star = QToolButton(text="☆")
         self._btn_star.setToolTip(_("点 ★ 选择加入 / 移出哪些生词本分组"))
         self._btn_star.setVisible(False)   # 启动无当前词，先藏起来
-        self._star_menu = QMenu(self._btn_star)
+        self._star_menu = _StayOpenMenu(self._btn_star)
         self._btn_star.setMenu(self._star_menu)
         self._btn_star.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self._star_menu.aboutToShow.connect(self._build_star_menu)
