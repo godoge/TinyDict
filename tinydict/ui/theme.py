@@ -349,6 +349,13 @@ QListWidget#wb_word_list::item{padding:5px 10px;}
 QListWidget#wb_word_list::item:selected{background:#dbeafe;color:#111827;}
 QLabel#wb_count{color:#6b7280;font-size:12px;padding:0 2px 2px 2px;}
 QLabel#wb_title{color:#374151;font-size:12px;font-weight:600;}
+/* 生词本搜索框：与查询历史的过滤框同一套观感 */
+QLineEdit#wb_search{
+    border:1px solid #d1d5db;border-radius:6px;padding:6px 10px;
+    font-size:13px;background:#fff;color:#111827;
+    selection-background-color:#dbeafe;
+}
+QLineEdit#wb_search:focus{border-color:#2563eb;}
 /* 查询历史窗口（过滤框 + 记录列表）复用同一套列表型对话框风格 */
 QLineEdit#history_filter{
     border:1px solid #d1d5db;border-radius:6px;padding:6px 10px;
@@ -381,6 +388,12 @@ QListWidget#wb_word_list::item{padding:5px 10px;}
 QListWidget#wb_word_list::item:selected{background:#1f4e79;color:#fff;}
 QLabel#wb_count{color:#9ca3af;font-size:12px;padding:0 2px 2px 2px;}
 QLabel#wb_title{color:#e5e7eb;font-size:12px;font-weight:600;}
+QLineEdit#wb_search{
+    border:1px solid #374151;border-radius:6px;padding:6px 10px;
+    font-size:13px;background:#2d2d30;color:#d4d4d4;
+    selection-background-color:#3b82f6;selection-color:#fff;
+}
+QLineEdit#wb_search:focus{border-color:#60a5fa;}
 QLineEdit#history_filter{
     border:1px solid #374151;border-radius:6px;padding:6px 10px;
     font-size:13px;background:#2d2d30;color:#d4d4d4;

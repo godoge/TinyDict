@@ -1485,9 +1485,15 @@ class MainWindow(QMainWindow):
                 self._status_info.setText(
                     _("{} 已在「{}」中").format(word, gname))
         else:
-            self.wordbook.remove_from_group(word, gid)
+            # 取消勾选最后一个分组 = 不再收藏这个词。数据层默认会把「没有
+            # 分组的词」兜底归回默认分组（生词本窗口的「从本分组移除」需要
+            # 这个不变量），但在这里那样做会变成「刚取消收藏，词又自动出现在
+            # 默认分组里」。所以 ★ 下拉一律用 rehome=False 彻底删除。
+            last_group = len(self.wordbook.groups_of(word)) <= 1
+            self.wordbook.remove_from_group(word, gid, rehome=False)
             self._status_info.setText(
-                _("已从「{}」移除：{}").format(gname, word))
+                _("已取消收藏：{}").format(word) if last_group
+                else _("已从「{}」移除：{}").format(gname, word))
         self._update_star()
         self.wordbook_changed.emit()
 

@@ -210,6 +210,16 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "关闭": "Close",
         "全部（{}）": "All ({})",
         "「{}」共 {} 个生词 · 双击查词": "“{}” has {} words · double-click to look up",
+        # ---- 生词本搜索 ----
+        "搜索当前分组的生词…": "Search words in this group…",
+        "只显示包含这段文字的生词（不区分大小写）。"
+        "要搜整个生词本，请先在左侧选择「全部」。":
+            "Show only words containing this text (case-insensitive). "
+            "To search the whole wordbook, select “All” on the left first.",
+        "「{}」匹配 {} 个（共 {} 个） · 双击查词":
+            "“{}” matched {} of {} · double-click to look up",
+        "清空的是整个「{}」，不受上方搜索影响。":
+            "This clears the whole “{}”, regardless of the search above.",
         "新建分组": "New group",
         "分组名称：": "Group name:",
         "分组「{}」已存在。": "Group “{}” already exists.",
@@ -438,6 +448,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "已加入「{}」：{}": "Added to “{}”: {}",
         "{} 已在「{}」中": "{} is already in “{}”",
         "已从「{}」移除：{}": "Removed from “{}”: {}",
+        "已取消收藏：{}": "Removed from wordbook: {}",
         "{}（{}）": "{name} ({count})",
         "＋ 新建分组…": "+ New group…",
         "所属分组：{}\n点 ★ 选择加入 / 移出哪些生词本分组":

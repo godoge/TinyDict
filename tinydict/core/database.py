@@ -247,17 +247,22 @@ class Database:
         return cur.rowcount or 0
 
     @staticmethod
-    def _ensure_has_group(c, word: str, removed_group_id: int):
+    def _ensure_has_group(c, word: str, removed_group_id: int,
+                          rehome: bool = True):
         """保证 word 至少属于一个分组（在「移出分组」之后调用）。
 
-        移出普通分组 → 归入默认分组；从默认分组移出 → 彻底删除该生词。
+        rehome=True（默认，生词本窗口的「从本分组移除 / 清空 / 删除分组」）：
+            移出普通分组 → 归入默认分组；从默认分组移出 → 彻底删除。
+        rehome=False（★ 下拉取消勾选）：取消最后一个分组就是「不想收藏了」，
+            一律彻底删除，不再兜底归入默认分组——否则用户会看到刚取消的
+            收藏又自动出现在默认分组里。
         """
         row = c.execute(
             "SELECT 1 FROM wordbook_tags WHERE word=? LIMIT 1", (word,)
         ).fetchone()
         if row is not None:
             return
-        if removed_group_id == DEFAULT_GROUP_ID:
+        if not rehome or removed_group_id == DEFAULT_GROUP_ID:
             c.execute("DELETE FROM wordbook WHERE word=?", (word,))
         else:
             c.execute(
@@ -473,11 +478,13 @@ class Database:
         c.commit()
         return cur.rowcount > 0
 
-    def wordbook_remove_from_group(self, word: str, group_id: int) -> bool:
+    def wordbook_remove_from_group(self, word: str, group_id: int,
+                                   rehome: bool = True) -> bool:
         """把生词移出指定分组。
 
-        移出后若它不再属于任何分组：从普通分组移出则自动归入默认分组；
-        从默认分组移出则彻底删除（否则会被立刻塞回默认分组，等于没删）。
+        移出后若它不再属于任何分组：默认（rehome=True，生词本窗口用）从
+        普通分组移出会归入默认分组，从默认分组移出则彻底删除；
+        rehome=False（★ 下拉取消勾选）则一律彻底删除，不再塞回默认分组。
         """
         word = (word or "").strip()
         c = self.conn()
@@ -485,7 +492,7 @@ class Database:
             "DELETE FROM wordbook_tags WHERE word=? AND group_id=?",
             (word, group_id))
         if cur.rowcount:
-            self._ensure_has_group(c, word, group_id)
+            self._ensure_has_group(c, word, group_id, rehome)
         c.commit()
         return cur.rowcount > 0
 
@@ -551,24 +558,36 @@ class Database:
         ).fetchall()
         return [r[0] for r in rows]
 
-    def wordbook_list(self, group_id: int = ALL_GROUPS) -> List[tuple]:
+    def wordbook_list(self, group_id: int = ALL_GROUPS,
+                      keyword: str = "") -> List[tuple]:
         """返回 [(word, added_at)]，按加入时间倒序。
 
         group_id: ALL_GROUPS(-1) 为全部；正整数为指定分组（0 及非法值按全部处理）。
+        keyword: 非空时只返回包含该片段的词（不区分大小写，按字面匹配）。
         """
         # added_at 只精确到秒，同一秒内加入的词用 rowid 兜底，
         # 保证「最新加入排最前」稳定成立（否则同秒词的顺序由存储布局决定）。
         c = self.conn()
-        if group_id == ALL_GROUPS or group_id <= 0:
-            rows = c.execute(
-                "SELECT word, added_at FROM wordbook"
-                " ORDER BY added_at DESC, rowid DESC"
-            ).fetchall()
-        else:
-            rows = c.execute(
-                "SELECT word, added_at FROM wordbook_tags WHERE group_id=?"
-                " ORDER BY added_at DESC, rowid DESC", (group_id,)
-            ).fetchall()
+        kw = (keyword or "").strip()
+        all_groups = group_id == ALL_GROUPS or group_id <= 0
+        table = "wordbook" if all_groups else "wordbook_tags"
+        conds, params = [], []
+        if not all_groups:
+            conds.append("group_id=?")
+            params.append(group_id)
+        if kw:
+            # 用户搜的是「字面片段」，不是 SQL 通配符：% / _ / \ 一律转义，
+            # 否则输入一个 % 就会把所有词都列出来。
+            escaped = (kw.replace("\\", "\\\\")
+                         .replace("%", "\\%")
+                         .replace("_", "\\_"))
+            conds.append("word COLLATE NOCASE LIKE ? ESCAPE '\\'")
+            params.append(f"%{escaped}%")
+        sql = f"SELECT word, added_at FROM {table}"
+        if conds:
+            sql += " WHERE " + " AND ".join(conds)
+        sql += " ORDER BY added_at DESC, rowid DESC"
+        rows = c.execute(sql, params).fetchall()
         return [(r[0], r[1] or "") for r in rows]
 
     def wordbook_export(

@@ -1,7 +1,10 @@
 """生词本窗口：分组管理 + 生词列表（加入分组 / 移除 / 删除 / 双击查词）。
 
 左侧是分组栏（全部 / 各分组，可新建、重命名、删除、排序），
-右侧是当前分组的生词列表（可多选后批量加入其它分组或从本分组移除）。
+右侧是当前分组的生词列表（顶部可输入片段即时搜索；可多选后批量加入
+其它分组或从本分组移除）。搜索范围就是左侧选中的分组，想搜整个生词本
+先切到「全部」——这样底部的「从本分组移除 / 清空」等批量操作的作用范围
+始终和列表一致，不会出现「列表是全局结果、按钮却只作用于当前分组」的错位。
 分组为标签式多归属：一个生词可以同时出现在多个分组里。
 
 没有「未分组」：每个生词至少属于一个分组。把词移出最后一个分组、
@@ -14,8 +17,8 @@ from datetime import datetime
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView, QDialog, QFileDialog, QHBoxLayout, QInputDialog, QLabel,
-    QListWidget, QListWidgetItem, QMenu, QMessageBox, QPushButton, QSplitter,
-    QVBoxLayout, QWidget,
+    QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPushButton,
+    QSplitter, QVBoxLayout, QWidget,
 )
 
 from ..core import wordbook_io as _io
@@ -133,6 +136,17 @@ class WordbookDialog(QDialog):
         rv = QVBoxLayout(right)
         rv.setContentsMargins(0, 0, 0, 0)
         rv.setSpacing(6)
+
+        self._search = QLineEdit(objectName="wb_search")
+        self._search.setPlaceholderText(_("搜索当前分组的生词…"))
+        self._search.setClearButtonEnabled(True)
+        self._search.setToolTip(_(
+            "只显示包含这段文字的生词（不区分大小写）。"
+            "要搜整个生词本，请先在左侧选择「全部」。"))
+        self._search.textChanged.connect(self._refresh_words)
+        self._search.returnPressed.connect(self._lookup_first)
+        rv.addWidget(self._search)
+
         self._count_label = QLabel(objectName="wb_count")
         rv.addWidget(self._count_label)
 
@@ -216,7 +230,14 @@ class WordbookDialog(QDialog):
             self.refresh()
 
     def select_group(self, group_id: int):
-        """切换到指定分组（主窗口打开本窗口时同步顶栏选中的分组）。"""
+        """切换到指定分组（主窗口打开本窗口时同步顶栏选中的分组）。
+
+        窗口是复用的，每次打开都清掉上回留下的搜索词，免得下次打开时
+        生词列表看起来「少了一半」却找不到原因。
+        """
+        self._search.blockSignals(True)
+        self._search.clear()
+        self._search.blockSignals(False)
         self._current_group = group_id
         self._note = ""
         self.refresh()
@@ -240,7 +261,8 @@ class WordbookDialog(QDialog):
         return -1
 
     def _refresh_words(self):
-        words = self._wordbook.words(self._current_group)
+        keyword = self._search.text().strip()
+        words = self._wordbook.words(self._current_group, keyword=keyword)
         self._word_list.clear()
         for word, added_at in words:
             item = QListWidgetItem(
@@ -248,18 +270,34 @@ class WordbookDialog(QDialog):
             item.setData(Qt.ItemDataRole.UserRole, word)
             self._word_list.addItem(item)
 
-        text = _("「{}」共 {} 个生词 · 双击查词").format(
-            self._current_group_name(), len(words))
+        # 搜索时给出「匹配 N 个 / 共 M 个」，否则保持原来的计数文案。
+        stats = self._wordbook.stats()
+        total = (stats["all"] if self._current_group == ALL_GROUPS
+                 else stats["groups"].get(self._current_group, 0))
+        if keyword:
+            text = _("「{}」匹配 {} 个（共 {} 个） · 双击查词").format(
+                self._current_group_name(), len(words), total)
+        else:
+            text = _("「{}」共 {} 个生词 · 双击查词").format(
+                self._current_group_name(), total)
         if self._note:
             text += f" · {self._note}"
         self._count_label.setText(text)
 
         is_real_group = self._current_group > 0
         self._btn_remove_from.setEnabled(is_real_group)
+        # 批量操作只针对列表里选中的词，搜索时列表是过滤后的子集，语义一致。
         self._btn_add_to.setEnabled(bool(words))
+        self._btn_delete.setEnabled(bool(words))
         self._btn_clear.setText(
             _("清空生词本") if self._current_group == ALL_GROUPS
             else _("清空本分组"))
+        # 清空是「整组/整本」级别的操作，和搜索结果无关；搜索时把范围写进
+        # tooltip，避免用户误以为只删掉筛出来的这几条。
+        self._btn_clear.setToolTip(
+            _("清空的是整个「{}」，不受上方搜索影响。").format(
+                self._current_group_name())
+            if keyword else "")
 
     def _current_group_name(self) -> str:
         """当前分组的名称（不带计数后缀），跨语言安全。
@@ -422,6 +460,12 @@ class WordbookDialog(QDialog):
         word = item.data(Qt.ItemDataRole.UserRole)
         if word:
             self.lookupRequested.emit(word)
+
+    def _lookup_first(self):
+        """搜索框里按回车：直接查第一条匹配结果（与查询历史窗口一致）。"""
+        item = self._word_list.item(0)
+        if item is not None:
+            self._on_double_clicked(item)
 
     def _add_to_group(self):
         words = self._selected_words()

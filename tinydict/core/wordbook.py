@@ -102,9 +102,15 @@ class WordBook:
         """从生词本彻底删除（含全部分组关联）。"""
         return self._db.wordbook_remove((word or "").strip())
 
-    def remove_from_group(self, word: str, group_id: int) -> bool:
-        """只把生词移出该分组，生词本体保留。"""
-        return self._db.wordbook_remove_from_group((word or "").strip(), group_id)
+    def remove_from_group(self, word: str, group_id: int,
+                          rehome: bool = True) -> bool:
+        """只把生词移出该分组，生词本体保留。
+
+        rehome=False 用于 ★ 下拉取消收藏：移出最后一个分组时彻底删除该生词，
+        不再兜底归入默认分组（详见 Database.wordbook_remove_from_group）。
+        """
+        return self._db.wordbook_remove_from_group(
+            (word or "").strip(), group_id, rehome)
 
     def remove_words_from_group(self, words: Sequence[str], group_id: int) -> int:
         return self._db.wordbook_remove_words_from_group(words, group_id)
@@ -121,9 +127,14 @@ class WordBook:
         """该生词所属的全部分组名。"""
         return self._db.wordbook_groups_of((word or "").strip())
 
-    def words(self, group_id: int = ALL_GROUPS) -> List[Tuple[str, str]]:
-        """返回 [(word, added_at)]，按加入时间倒序。"""
-        return self._db.wordbook_list(group_id)
+    def words(self, group_id: int = ALL_GROUPS,
+              keyword: str = "") -> List[Tuple[str, str]]:
+        """返回 [(word, added_at)]，按加入时间倒序。
+
+        keyword 非空时只返回包含该片段的词（不区分大小写，按字面匹配）；
+        搜索范围仍是 group_id 指定的分组（ALL_GROUPS 即整个生词本）。
+        """
+        return self._db.wordbook_list(group_id, keyword)
 
     def export_rows(
             self,
