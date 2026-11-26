@@ -7,12 +7,16 @@ import re as _re
 import sys
 from pathlib import Path
 
-from PySide6.QtGui import QClipboard, QColor, QDesktopServices, QGuiApplication
+from PySide6.QtGui import (
+    QClipboard, QColor, QDesktopServices, QFontMetrics, QGuiApplication,
+    QPainter,
+)
 from PySide6.QtCore import QByteArray, QEvent, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtWidgets import (
-    QComboBox, QFrame, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
-    QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox, QSplitter,
-    QStatusBar, QTabBar, QToolButton, QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QFrame, QHBoxLayout, QInputDialog, QLabel,
+    QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox,
+    QSizePolicy, QSplitter, QStatusBar, QTabBar, QTextEdit, QToolButton,
+    QVBoxLayout, QWidget,
 )
 from PySide6.QtWebEngineCore import (
     QWebEnginePage, QWebEngineProfile, QWebEngineSettings,
@@ -24,12 +28,14 @@ from urllib.parse import unquote
 from ..core.query import DictionaryService, EntryResult
 from ..core.wordbook import DEFAULT_GROUP_ID, WordBook
 from ..core.history import HistoryBook, display_text
+from ..core.database import Database
+from ..core.notes import Notes
 from ..core import dict_config
 from .. import __version__
 from ..config import Config
 from ..i18n import _, get_language, restart_application
 from . import theme as _theme
-from .icons import nav_icon
+from .icons import nav_icon, note_dot_icon, star_icon
 from .about_dialog import AboutDialog, RELEASES_URL, REPO_URL
 from .dict_manager_dialog import DictManagerDialog
 from .history_dialog import HistoryDialog
@@ -37,6 +43,17 @@ from .resource_inliner import inline_resources
 from .scheme_handler import MdxSchemeHandler
 from .settings_dialog import SettingsDialog
 from .wordbook_dialog import WordbookDialog
+
+
+# 候选列表里「当前输入词」这条自建词条的标记 role。
+# UserRole 存真正的词（点击 / 回车都取它），这个 role 只存 bool，
+# 用来区分「词库给出的联想词」与「用户自己输入的、词库未必收录的词」。
+_VIRTUAL_ENTRY_ROLE = int(Qt.ItemDataRole.UserRole) + 1
+
+# 固定词条标题条的厚度：单行结构（词形 + 右侧工具胶囊）。
+# 写死并配合 _view 的 Expanding 策略，收录 / 未收录 / 笔记开合 / 窗口缩放
+# 都不会把它撑高或压矮。52px 给圆角胶囊留出上下呼吸空间。
+_ENTRY_HEADER_HEIGHT = 52
 
 
 def _esc(s: str) -> str:
@@ -326,15 +343,22 @@ def entry_theme_js() -> str:
     )
 
 
-def _page(inner: str, theme_mode: str = "light") -> str:
+def _page(inner: str, theme_mode: str = "light", *,
+          hide_headword: bool = True) -> str:
     """组装完整 HTML 页面：注入默认 CSS + 主题种子 + 尾部脚本。
 
     这里的默认 CSS 仅用于应用「自己生成」的页面（欢迎页 / 未找到 /
     加载中 / 纯文本词条模板）——它们已有完整的深浅两套样式，因此词条页
     目标恒为 "native"（不干预）。真实词库词条的明暗由通用方案处理
     （见 entry_page / DictPage 注入脚本）。
+
+    hide_headword=True 时隐藏自生成页面里的 .sd-headword：词形已由上方
+    固定的 Qt 标题条统一展示，避免收录页 / 未收录页出现两行重复标题。
+    HTML 里的词形仍保留，供复制、测试和无障碍读取使用。
     """
     css = _theme.entry_css(theme_mode)
+    if hide_headword:
+        css += "\n.sd-headword{display:none;}\n"
     return (
         "<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
         f"<style>{css}</style>{_theme_seed(theme_mode, 'native')}</head>"
@@ -479,8 +503,9 @@ def welcome_page(theme_mode: str = "light") -> str:
 <li>Click <b>Dictionaries</b> at the top right to add <code>.mdx</code> files, or pick a
 <b>dictionary folder</b> (all dictionaries inside are scanned) — ready to use instantly, no import</li>
 <li>Type a word in the search box above and press Enter; the left list shows live suggestions</li>
-<li>Click <b>★</b> to open a menu and tick the <b>wordbook groups</b> to add the current entry to
-(you can add it to several), then open <b>Wordbook</b> to review and organize by group
+<li>Click <b>★</b> in the toolbar beside the fixed entry title and tick the
+<b>wordbook groups</b> to add the current entry to (you can add it to several),
+then open <b>Wordbook</b> to review and organize by group
 (a word can belong to multiple groups)</li>
 <li><b>Pin window</b> keeps the window always on top; closing the window minimizes to the tray by default</li>
 <li>Default global shortcuts: <code>Ctrl+Alt+D</code> show/hide window,
@@ -496,14 +521,15 @@ def welcome_page(theme_mode: str = "light") -> str:
 <li>点击右上角<b>「词库」</b>添加 <code>.mdx</code> 文件，或直接选择
 <b>词库文件夹</b>（自动扫描其中全部词库）—— 即加即用，无需导入</li>
 <li>在上方搜索框输入单词，回车查词，左侧列表为实时联想</li>
-<li>点 <b>★</b> 弹出菜单，勾选要把当前词条加入的<b>生词本分组</b>（可同时加入多个），
-点<b>「生词本」</b>按分组查看与整理（一个词可同时属于多个分组）</li>
+<li>点固定词条标题右侧的 <b>★</b> 弹出菜单，勾选要把当前词条加入的
+<b>生词本分组</b>（可同时加入多个），点<b>「生词本」</b>按分组查看与整理
+（一个词可同时属于多个分组）</li>
 <li><b>「置顶窗口」</b>可让窗口常驻最前；关闭窗口默认最小化到系统托盘</li>
 <li>默认全局快捷键：<code>Ctrl+Alt+D</code> 显示/隐藏窗口，
 <code>Ctrl+Alt+Q</code> 屏幕划词取词（可在设置中修改）</li>
 </ul>
 </div>"""
-    return _page(body, theme_mode)
+    return _page(body, theme_mode, hide_headword=False)
 
 
 def not_found_page(word: str, theme_mode: str = "light") -> str:
@@ -516,6 +542,10 @@ def not_found_page(word: str, theme_mode: str = "light") -> str:
             "<ul><li>Check the spelling (see the suggestions on the left)</li>"
             "<li>In Dictionaries, make sure the dictionary is enabled and Ready "
             "(newly added dictionaries are still loading in the background)</li></ul>"
+            "<p>This entry still exists: click <b>★</b> in the toolbar beside "
+            "the fixed title to save it to a wordbook, and you can open "
+            "it again "
+            "from there.</p>"
             "</div>"
         )
     else:
@@ -527,6 +557,8 @@ def not_found_page(word: str, theme_mode: str = "light") -> str:
             "<ul><li>检查拼写（可参考左侧候选列表）</li>"
             "<li>在「词库」中确认词库已启用且状态为「就绪」"
             "（新添加的词库后台加载中，稍候即可查询）</li></ul>"
+            "<p>这个词条仍然有效：点标题右侧的 <b>★</b> 即可收藏到生词本，"
+            "之后在生词本里双击还能随时查回。</p>"
             "</div>"
         )
     return _page(body, theme_mode)
@@ -751,6 +783,44 @@ class _StayOpenMenu(QMenu):
         super().mouseReleaseEvent(event)
 
 
+class _HeadwordLabel(QLabel):
+    """固定词条标题：宽度跟着词形走，窄窗口里过长时右端省略。
+
+    水平策略用 Preferred + 自定义 sizeHint，让 ★ / 「显示笔记」能紧贴词形
+    右侧排列，而不是被词形的 stretch 顶到标题条最右端。MAX_WIDTH 给长词
+    一个上限，避免按钮被挤到窗口外；minimumSizeHint 宽度给 0，窗口变窄时
+    优先压缩词形（省略显示），按钮始终完整可见。完整词仍可由 tooltip 看到。
+    """
+
+    MAX_WIDTH = 320
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred,
+                           QSizePolicy.Policy.Preferred)
+        self.setWordWrap(False)
+        self.setMinimumWidth(0)
+
+    def sizeHint(self):
+        # QSS 里词形左右各有 2px padding，sizeHint 一并算进去，
+        # 否则短词会被 elidedText() 误省略掉最后一个字母。
+        text_w = QFontMetrics(self.font()).horizontalAdvance(self.text())
+        return QSize(min(text_w, self.MAX_WIDTH) + 4,
+                     super().sizeHint().height())
+
+    def minimumSizeHint(self):
+        return QSize(0, super().minimumSizeHint().height())
+
+    def paintEvent(self, event):
+        rect = self.contentsRect()
+        elided = QFontMetrics(self.font()).elidedText(
+            self.text(), Qt.TextElideMode.ElideRight, rect.width())
+        painter = QPainter(self)
+        painter.setPen(self.palette().color(self.foregroundRole()))
+        painter.drawText(
+            rect, self.alignment() | Qt.AlignmentFlag.AlignVCenter, elided)
+
+
 class MainWindow(QMainWindow):
     settings_saved = Signal()      # 设置已保存（app 层据此重绑快捷键）
     wordbook_changed = Signal()    # 生词本内容变化
@@ -759,13 +829,25 @@ class MainWindow(QMainWindow):
 
     def __init__(self, service: DictionaryService, config: Config,
                  wordbook: WordBook, theme_manager: "_theme.ThemeManager | None" = None,
-                 history: "HistoryBook | None" = None, parent=None):
+                 history: "HistoryBook | None" = None,
+                 notes: "Notes | None" = None, parent=None):
         super().__init__(parent)
         self._service = service
         self._config = config
         self.wordbook = wordbook
         # 查询历史（可选：测试里不传即不记录）
         self.history = history
+        # 笔记门面：正式启动由 app 层注入共享的 Database；测试里不传时用一个
+        # 内存库，保证所有笔记相关方法都有真实实现，不需要到处判 None。
+        self.notes = notes if notes is not None else Notes(
+            Database(":memory:"), "local")
+        # 笔记编辑器的状态：_note_word 是「当前编辑器内容属于哪个词」，
+        # 与 _current_word 分开，防止切词瞬间把上一条内容写到新词上。
+        self._note_word = ""
+        self._note_dirty = False
+        self._note_loading = False
+        self._note_timer = QTimer(self, singleShot=True, interval=700)
+        self._note_timer.timeout.connect(self._flush_note)
         self._theme_manager = theme_manager
         self._results: list[EntryResult] = []
         self._current_word = ""
@@ -790,7 +872,7 @@ class MainWindow(QMainWindow):
         # （必须在 _build_ui 之后，那时 splitter 才存在）
         self._restore_window_state()
         QGuiApplication.instance().aboutToQuit.connect(self._save_window_state)
-        # 顶栏 ★（收藏）初始状态 + 生词变化时同步刷新
+        # 词条标题条 ★（收藏）初始状态 + 生词变化时同步刷新
         self._reload_groups()
         self.wordbook_changed.connect(self._reload_groups)
         self._view.setHtml(welcome_page(self._current_theme_mode()), QUrl("mdx://0/"))
@@ -902,6 +984,28 @@ class MainWindow(QMainWindow):
                 (self._act_about, "about"),
             ):
                 act.setIcon(nav_icon(kind, color))
+        # 收藏星和笔记圆点也是位图，换肤时一并重画，否则会残留上一套
+        # 主题的颜色。首次建窗口时标题条还没建好（本函数在 _build_ui
+        # 中段调用），由标题条创建处补画。
+        if getattr(self, "_btn_star", None) is not None:
+            self._apply_star_icon()
+        if getattr(self, "_chk_notes", None) is not None:
+            self._refresh_note_indicator()
+
+    def _apply_star_icon(self):
+        """按当前主题 + 收藏状态重画标题条的收藏星。
+
+        已收藏保持金色强调，未收藏改成中性黑白灰（浅色近黑、深色近白），
+        两者都随主题取值、都不写死白色。图标是 QPainter 位图，QSS 的
+        color 对它无效，所以收藏变化和换肤都必须重新生成；空心态内部
+        保持透明，透出的是标题条背景。
+        """
+        mode = self._current_theme_mode()
+        filled = bool(getattr(self, "_star_filled", False))
+        color = QColor(_theme.star_color(mode) if filled
+                       else _theme.star_neutral_color(mode))
+        self._btn_star.setIcon(star_icon(filled, color))
+        self._btn_star.setIconSize(QSize(20, 20))
 
     # ---------------------------------------------------------------- UI
     def _build_ui(self):
@@ -910,10 +1014,10 @@ class MainWindow(QMainWindow):
         root.setContentsMargins(10, 8, 10, 6)
         root.setSpacing(6)
 
-        # ---- 顶栏（按钮横向并排，整体靠左、紧贴左右箭头）
-        # 顶栏分两组：左侧是「浏览导航 + 收藏」（← → | ☆），紧挨窗口左边；
-        # 右侧是「功能工具栏」（词库 / 生词本 / 历史 / 更多），靠 addStretch 顶到右边。
-        # 两组之间用弹性空白隔开，按钮各自贴边、不往中间散开。
+        # ---- 顶栏
+        # 左侧只保留浏览导航（← →），右侧是功能工具栏（词库 / 生词本 /
+        # 历史 / 更多）。原来放在这里的 ★ 收藏按钮移到词条标题条里，
+        # 这样收藏、笔记开关都紧挨当前单词。
         top = QHBoxLayout()
         top.setSpacing(4)
 
@@ -948,20 +1052,8 @@ class MainWindow(QMainWindow):
         # 方向键在候选列表里上下移动选择（否则只能拿鼠标点）
         self.search_edit.installEventFilter(self)
 
-        # 收藏：单个 ★ 按钮（没查词时隐藏，查词后才出现）。
-        # 点 ★ 弹出下拉，列出所有生词本分组并勾选当前词所属分组；
-        # 勾选 / 取消即把当前词加入 / 移出对应分组。原「分组下拉框」已并入这里。
-        self._btn_star = QToolButton(text="☆")
-        self._btn_star.setToolTip(_("点 ★ 选择加入 / 移出哪些生词本分组"))
-        self._btn_star.setVisible(False)   # 启动无当前词，先藏起来
-        self._star_menu = _StayOpenMenu(self._btn_star)
-        self._btn_star.setMenu(self._star_menu)
-        self._btn_star.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        self._star_menu.aboutToShow.connect(self._build_star_menu)
-        top.addWidget(self._btn_star)
-
         # 弹性空白：把后续的功能工具栏（词库 / 生词本 / 历史 / 更多）顶到窗口右侧，
-        # 与左侧的「← → | ☆」分组拉开距离。
+        # 与左侧的「← →」分组拉开距离。
         top.addStretch(1)
 
         # 词典功能按钮（词库 / 生词本 / 历史）—— 与查词直接相关，各自成独立按钮；
@@ -984,6 +1076,7 @@ class MainWindow(QMainWindow):
             self._nav_buttons.append((btn, kind))
 
         # 「更多」下拉：置顶窗口 / 设置 / 关于。
+        # 笔记面板开关已移到词条标题条右侧的工具胶囊，这里不再重复放一项。
         # 置顶窗口 是可勾选的动作（对应原先的 checkable 按钮），勾选即常驻最前；
         # 设置 / 关于 打开对应对话框。InstantPopup：点击按钮立刻弹出菜单。
         more = QToolButton(text=_("更多"))
@@ -1053,16 +1146,102 @@ class MainWindow(QMainWindow):
 
         self._view = EntryView()
         self._view.setPage(self._page)
+        # QWebEngineView 的垂直策略默认只是 Preferred，和标题条 / 词典标签
+        # 一样带 GrowFlag：QVBoxLayout 会把多余高度按比例分给三者。实测
+        # 收起笔记面板后 entry_page 从 420 涨到 554，标题条被撑高 41→45。
+        # 让词条内容独占剩余空间，标题条与标签只按自己的 sizeHint 排。
+        self._view.setSizePolicy(QSizePolicy.Policy.Expanding,
+                                 QSizePolicy.Policy.Expanding)
         # 右键「搜索「xxx」」：以选中的文本直接查词
         self._view.search_requested.connect(self.do_lookup)
 
-        # 词条页容器：顶部词典切换标签 + 下方词条内容，使切换标签成为
-        # 词条页的页头（只压在词条内容上方，不再横跨左侧联想列表）
+        # 固定词条标题条：单行结构。左边是词形，右边紧跟一个圆角「工具胶囊」
+        # （★ 收藏 | 分隔线 | ● + 显示笔记）。把三个零散控件收进同一个容器，
+        # 视觉上是一组，不会像第二行那样散在标题条上。无论词库是否收录、
+        # 切到哪一部词典，词形与工具栏的位置都不随词库 HTML 漂移。
+        self._entry_header = QFrame(objectName="entry_header")
+        # 硬约束厚度：收录 / 未收录 / 有无词典标签 / 笔记开合 / 窗口缩放
+        # 都不该让标题条"跳一下"。
+        self._entry_header.setFixedHeight(_ENTRY_HEADER_HEIGHT)
+        outer = QHBoxLayout(self._entry_header)
+        outer.setContentsMargins(12, 0, 12, 0)
+        outer.setSpacing(14)
+
+        # 词形：宽度按词形自适应，过长时右端省略；末尾 spacer 吃掉剩余
+        # 宽度，让工具胶囊紧跟词形右侧，而不是被顶到标题条最右端。
+        self._entry_title_layout = QHBoxLayout()
+        self._entry_title_layout.setContentsMargins(0, 0, 0, 0)
+        self._entry_title_layout.setSpacing(0)
+        self._entry_headword = _HeadwordLabel(objectName="entry_headword")
+        self._entry_headword.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self._entry_title_layout.addWidget(self._entry_headword)
+        outer.addLayout(self._entry_title_layout)
+
+        # 工具胶囊：淡灰圆角底 + 细描边，把收藏 / 笔记开关收成一组。
+        # 高度跟词条内容对齐用 AlignVCenter，胶囊自身由内容撑出厚度。
+        self._entry_tools_host = QFrame(objectName="entry_tools")
+        tools = QHBoxLayout(self._entry_tools_host)
+        tools.setContentsMargins(4, 3, 8, 3)
+        tools.setSpacing(6)
+        self._entry_tools_layout = tools
+
+        # 收藏星沿用原来的可勾选分组菜单；只是从顶栏搬进词条标题条。
+        # 图标用 QPainter 矢量绘制（见 icons.star_icon），不再用 ☆ / ★ 字符：
+        # 空心字形在 18px 下会栅格化成锯齿毛边，而实心字形不会，视觉不一致。
+        self._btn_star = QToolButton(objectName="entry_star_btn")
+        self._btn_star.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self._btn_star.setToolTip(_("点 ★ 选择加入 / 移出哪些生词本分组"))
+        self._btn_star.setVisible(False)   # 启动无当前词，先藏起来
+        self._star_filled = False         # 未收藏；切换时只重画图标，不改文字
+        self._star_menu = _StayOpenMenu(self._btn_star)
+        self._btn_star.setMenu(self._star_menu)
+        self._btn_star.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self._star_menu.aboutToShow.connect(self._build_star_menu)
+        tools.addWidget(self._btn_star)
+        # _refresh_nav_icons() 在建标题条之前就跑过了，这里补一次首次绘制。
+        self._apply_star_icon()
+
+        # 细分隔线：收藏与笔记是两组功能，用一条竖线轻轻分开。
+        self._entry_tool_sep = QFrame(objectName="entry_tool_sep")
+        self._entry_tool_sep.setFixedWidth(1)
+        tools.addWidget(self._entry_tool_sep)
+
+        # 笔记面板开关：「圆点 + 勾选框」组成一个紧贴的小控件组，圆点在
+        # 勾选框左边（不是夹在方框与文字之间）。勾选 = 面板展开，状态写回
+        # notes_visible；圆点只做「有笔记」标识，勾选仍由用户手动控制。
+        # 圆点用固定尺寸的 QLabel + 透明占位图，切词时整组宽度不左右跳。
+        self._notes_group = QWidget(objectName="entry_notes_group")
+        group = QHBoxLayout(self._notes_group)
+        group.setContentsMargins(0, 0, 0, 0)
+        group.setSpacing(4)
+        self._note_dot = QLabel(objectName="entry_note_dot")
+        self._note_dot.setFixedSize(10, 10)
+        self._note_dot.setScaledContents(False)
+        group.addWidget(self._note_dot)
+        self._chk_notes = QCheckBox(
+            _("显示笔记"), objectName="entry_notes_cb")
+        self._chk_notes.setChecked(bool(self._config["notes_visible"]))
+        self._chk_notes.toggled.connect(self._toggle_notes_panel)
+        group.addWidget(self._chk_notes)
+        tools.addWidget(self._notes_group)
+
+        outer.addWidget(self._entry_tools_host,
+                        alignment=Qt.AlignmentFlag.AlignVCenter)
+        outer.addStretch(1)
+        self._entry_header.setVisible(False)
+        # 首次绘制：无当前词 → 圆点隐藏 + 默认 tooltip
+        self._refresh_note_indicator()
+
+        # 词条页容器：顶部词典切换标签 + 固定标题条 + 下方词条内容。
+        # 切换标签和标题条都只压在词条内容上方，不再横跨左侧联想列表。
         entry_page = QWidget()
         entry_vbox = QVBoxLayout(entry_page)
         entry_vbox.setContentsMargins(0, 0, 0, 0)
         entry_vbox.setSpacing(0)
         entry_vbox.addWidget(self._tabs)
+        entry_vbox.addWidget(self._entry_header)
         entry_vbox.addWidget(self._view)
 
         # 左侧面板：搜索框与候选词列表同属一个带边框的卡片（#search_panel），
@@ -1075,10 +1254,24 @@ class MainWindow(QMainWindow):
         left_vbox.addWidget(self.search_edit)
         left_vbox.addWidget(self.suggest_list, stretch=1)
 
+        # 笔记面板挂在词条页下方：垂直 splitter 让用户可以把它拉高/收窄。
+        # 水平 splitter 仍然只管「左侧候选 / 右侧内容」的比例，配置里保存的
+        # splitter_state 因此和旧版本完全兼容。
+        self._notes_panel = self._build_notes_panel()
+        # 启动页是欢迎页、还没有当前词条，笔记面板不能先挂出来。
+        # 进入词条后由 _update_entry_header() 按用户上次的选择自动恢复。
+        self._apply_notes_visibility()
+        self._notes_splitter = QSplitter(Qt.Orientation.Vertical)
+        self._notes_splitter.addWidget(entry_page)
+        self._notes_splitter.addWidget(self._notes_panel)
+        self._notes_splitter.setStretchFactor(0, 1)
+        self._notes_splitter.setStretchFactor(1, 0)
+        self._notes_splitter.setSizes([540, 130])
+
         # 存为成员：退出时要 saveState() 持久化左右栏比例
         self._splitter = QSplitter(Qt.Orientation.Horizontal)
         self._splitter.addWidget(left_panel)
-        self._splitter.addWidget(entry_page)
+        self._splitter.addWidget(self._notes_splitter)
         self._splitter.setStretchFactor(0, 0)
         self._splitter.setStretchFactor(1, 1)
         self._splitter.setSizes([230, 750])
@@ -1109,7 +1302,23 @@ class MainWindow(QMainWindow):
             # 还没输入时，把最近查过的词直接列出来，点一下就能再看
             self._fill_recent_history()
             return
-        for word in self._service.suggest(text, limit=30):
+        suggestions = self._service.suggest(text, limit=30)
+        # 词库没收录的词也要能成为一条「当前词条」：否则候选列表里没有它，
+        # 用户点不到、★ 收藏和后续笔记也就没有依附对象。所以只要联想结果里
+        # 没有同名词条，就把输入词本身作为首条插入（斜体 + tooltip 标明）。
+        # 已有同名词条（忽略大小写）时不重复插入，保持词库原本的优先级顺序。
+        if not any(w.casefold() == text.casefold() for w in suggestions):
+            item = QListWidgetItem(text)
+            item.setData(Qt.ItemDataRole.UserRole, text)
+            item.setData(_VIRTUAL_ENTRY_ROLE, True)
+            item.setToolTip(
+                _("「{}」在词库里没有对应词条，仍可作为当前词条收藏到生词本。")
+                .format(text))
+            font = item.font()
+            font.setItalic(True)
+            item.setFont(font)
+            self.suggest_list.addItem(item)
+        for word in suggestions:
             item = QListWidgetItem(word)
             item.setToolTip(word)
             self.suggest_list.addItem(item)
@@ -1172,15 +1381,22 @@ class MainWindow(QMainWindow):
         # 填入前必须阻塞 textChanged，否则会立刻触发新一轮联想刷新，
         # 把刚移动过去的高亮冲掉。
         if self._config["fill_input_on_select"]:
+            # 与点击候选一致取 UserRole：历史条目的显示文本带时间后缀，
+            # 直接把 item.text() 填进搜索框会把时间戳也带进去。
+            word = str(item.data(Qt.ItemDataRole.UserRole) or item.text())
             self.search_edit.blockSignals(True)
-            self.search_edit.setText(item.text())
+            self.search_edit.setText(word)
             self.search_edit.blockSignals(False)
 
     def _on_return(self):
         # 上下键选中的候选词优先于输入框原文：未开启「填入搜索框」时，
         # 两者并不相同，直接回车必须以看到的高亮项为准。
         item = self.suggest_list.currentItem()
-        text = item.text().strip() if item is not None else ""
+        # 与鼠标点击一致：优先取 UserRole 里的真词。历史条目的显示文本是
+        # 「word    （时间）」，直接用 text() 会把时间也当成词去查。
+        text = ""
+        if item is not None:
+            text = str(item.data(Qt.ItemDataRole.UserRole) or item.text()).strip()
         if not text:
             text = self.search_edit.text().strip()
         if text:
@@ -1224,6 +1440,201 @@ class MainWindow(QMainWindow):
             )
             return
 
+    # ------------------------------------------------------------ 词条笔记
+    def _build_notes_panel(self):
+        """词条页下方的笔记面板：标题 + 保存状态 + 冲突提示 + 编辑区。"""
+        panel = QFrame(objectName="notes_panel")
+        vbox = QVBoxLayout(panel)
+        vbox.setContentsMargins(8, 4, 8, 6)
+        vbox.setSpacing(4)
+
+        head = QHBoxLayout()
+        head.setSpacing(6)
+        self._notes_title = QLabel(_("笔记"), objectName="notes_title")
+        head.addWidget(self._notes_title)
+        self._notes_state = QLabel("", objectName="notes_state")
+        head.addWidget(self._notes_state)
+        head.addStretch(1)
+        self._btn_note_conflicts = QToolButton(objectName="notes_conflict_btn")
+        self._btn_note_conflicts.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self._btn_note_conflicts.setToolTip(_("查看两端冲突的笔记并人工合并"))
+        self._btn_note_conflicts.clicked.connect(self._open_note_conflicts)
+        head.addWidget(self._btn_note_conflicts)
+        self._btn_note_transfer = QToolButton(text=_("导入 / 导出"))
+        self._btn_note_transfer.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self._btn_note_transfer.setToolTip(
+            _("导出笔记备份，或从另一台设备导入并合并"))
+        self._btn_note_transfer.clicked.connect(self._open_notes_transfer)
+        head.addWidget(self._btn_note_transfer)
+        vbox.addLayout(head)
+
+        self._notes_editor = QTextEdit(objectName="notes_editor")
+        self._notes_editor.setPlaceholderText(
+            _("给当前词条写点笔记…（自动保存，词库没收录的词也可以写）"))
+        self._notes_editor.setAcceptRichText(False)
+        self._notes_editor.textChanged.connect(self._on_note_changed)
+        self._notes_editor.setEnabled(False)
+        vbox.addWidget(self._notes_editor, stretch=1)
+
+        self._refresh_conflict_badge()
+        return panel
+
+    def _refresh_conflict_badge(self):
+        """冲突按钮只在有未处理冲突时出现，避免平时占地方。"""
+        btn = getattr(self, "_btn_note_conflicts", None)
+        if btn is None:
+            return
+        try:
+            count = self.notes.stats()["conflicts"]
+        except Exception:
+            count = 0
+        btn.setVisible(count > 0)
+        btn.setText(_("{} 条冲突待合并").format(count) if count else "")
+
+    def _apply_notes_visibility(self):
+        """笔记面板只在「已进入某个词条」且「显示笔记」已勾选时出现。
+
+        笔记是挂在当前词条上的：启动 / 换肤回到欢迎页时 _current_word 为空，
+        没有词条就没有可写、可显示的内容，底部不该挂一个空笔记框（配置
+        notes_visible 默认 True，旧逻辑在 _build_ui 里就直接显示了）。
+        这里只决定实际可见性，不改配置；用户上次的选择在进入词条时恢复。
+        """
+        panel = getattr(self, "_notes_panel", None)
+        if panel is None:
+            return
+        panel.setVisible(bool(self._current_word)
+                         and bool(self._config["notes_visible"]))
+
+    def _toggle_notes_panel(self, checked: bool):
+        if not hasattr(self, "_notes_panel"):
+            return
+        checked = bool(checked)
+        self._flush_note()
+        self._config["notes_visible"] = checked
+        self._config.save()
+        self._apply_notes_visibility()
+        # 配置恢复 / 代码调用也要同步标题条勾选框的状态，避免点一次没反应。
+        btn = getattr(self, "_chk_notes", None)
+        if btn is not None and btn.isChecked() != checked:
+            btn.blockSignals(True)
+            btn.setChecked(checked)
+            btn.blockSignals(False)
+
+    def _refresh_note_indicator(self):
+        """刷新「显示笔记」勾选框左侧的「有笔记」小圆点。
+
+        取代原先独立的「● 有笔记」标签：圆点只做状态标识，不改变勾选框的
+        checked 状态（面板显隐仍由用户手动控制）。编辑器里的未落盘草稿
+        也算有笔记，清空后立即取消圆点。颜色随主题，换肤时由
+        _refresh_nav_icons() 重画。
+        """
+        btn = getattr(self, "_chk_notes", None)
+        dot = getattr(self, "_note_dot", None)
+        if btn is None or dot is None:
+            return
+        word = getattr(self, "_current_word", "")
+        has_note = False
+        if word:
+            editor = getattr(self, "_notes_editor", None)
+            if (getattr(self, "_note_word", None) == word
+                    and not getattr(self, "_note_loading", False)
+                    and editor is not None):
+                has_note = bool(editor.toPlainText().strip())
+            else:
+                try:
+                    has_note = bool((self.notes.body(word) or "").strip())
+                except Exception:
+                    has_note = False
+        self._note_indicator_on = bool(has_note)
+        # 无笔记时把圆点整个藏起来，让「显示笔记」勾选框左对齐到组首，
+        # 不留下一个空位；有笔记时才显示彩色圆点，勾选框相应右移。
+        color = (QColor(_theme.note_dot_color(self._current_theme_mode()))
+                 if has_note else QColor(0, 0, 0, 0))
+        dot.setPixmap(note_dot_icon(color).pixmap(QSize(10, 10)))
+        dot.setVisible(has_note)
+        tip = (_("这个词条已有笔记；勾选「显示笔记」可展开查看") if has_note
+               else _("显示 / 隐藏词条下方的笔记面板（笔记会自动保存）"))
+        dot.setToolTip(tip)
+        btn.setToolTip(tip)
+
+    def _update_entry_header(self):
+        """固定标题条只在有当前词条时出现，词形与按钮状态集中刷新。"""
+        header = getattr(self, "_entry_header", None)
+        if header is None:
+            return
+        word = self._current_word
+        header.setVisible(bool(word))
+        self._entry_headword.setText(word)
+        self._entry_headword.setToolTip(word)
+        self._refresh_note_indicator()
+        # 从欢迎页进入第一个词条：按配置把笔记面板展开（或保持收起）。
+        self._apply_notes_visibility()
+
+    def _open_notes_transfer(self):
+        self._flush_note()
+        from .notes_dialog import NotesTransferDialog
+        dlg = NotesTransferDialog(self.notes, self.wordbook,
+                                  theme_manager=self._theme_manager,
+                                  parent=self)
+        dlg.exec()
+        self._refresh_conflict_badge()
+        # 导入可能改写了当前词的笔记，重新加载一次，别让编辑器显示旧内容
+        if self._current_word:
+            self._load_note(self._current_word)
+
+    def _open_note_conflicts(self):
+        self._flush_note()
+        from .notes_dialog import NoteConflictDialog
+        NoteConflictDialog(self.notes, theme_manager=self._theme_manager,
+                           parent=self).exec()
+        self._refresh_conflict_badge()
+        if self._current_word:
+            self._load_note(self._current_word)
+
+    def _on_note_changed(self):
+        if self._note_loading or not self._note_word:
+            return
+        self._note_dirty = True
+        self._notes_state.setText(_("正在保存…"))
+        self._note_timer.start()
+        self._refresh_note_indicator()
+
+    def _load_note(self, word: str):
+        """切换到另一个词条：先把上一条未保存的内容落盘，再加载新词笔记。"""
+        self._flush_note()
+        self._note_loading = True
+        try:
+            self._note_word = (word or "").strip()
+            text = self.notes.body(self._note_word) if self._note_word else ""
+            self._notes_editor.setPlainText(text)
+            self._notes_editor.setEnabled(bool(self._note_word))
+            self._notes_title.setText(
+                _("笔记 · {}").format(self._note_word) if self._note_word
+                else _("笔记"))
+            self._notes_state.setText("")
+            self._note_dirty = False
+        finally:
+            self._note_loading = False
+            self._refresh_note_indicator()
+
+    def _flush_note(self):
+        """防抖到期 / 切词 / 隐藏面板 / 退出时把编辑器内容写进 SQLite。"""
+        if not self._note_dirty or not self._note_word:
+            return
+        self._note_timer.stop()
+        text = self._notes_editor.toPlainText()
+        try:
+            self.notes.set(self._note_word, text)
+            self._note_dirty = False
+            self._notes_state.setText(_("已保存"))
+        except Exception as exc:
+            # 不让一次写库失败打断查词；状态栏明确报错，内容仍留在编辑器里，
+            # 下一轮防抖会再试一次（_note_dirty 保持 True）。
+            self._notes_state.setText(_("保存失败：{}").format(exc))
+        self._refresh_note_indicator()
+
     def do_lookup(self, word: str, push_history: bool = True,
                   sync_input: bool = True, preserve_tab: bool = False):
         """查词并渲染。
@@ -1240,6 +1651,11 @@ class MainWindow(QMainWindow):
         if not word:
             return
         self._current_word = word
+        # 笔记以「当前词条」为锚：切词时先把上一条落盘，再加载这一条的笔记。
+        # 放在最前面，保证后续任何提前 return（如结果待补齐）都不会漏掉。
+        self._load_note(word)
+        # 固定标题条先于渲染更新：收录页 / 未收录页 / 加载中页共用同一个词形。
+        self._update_entry_header()
 
         if sync_input and self.search_edit.text() != word:
             self.search_edit.blockSignals(True)
@@ -1275,13 +1691,12 @@ class MainWindow(QMainWindow):
         if push_history:
             self._push_history(word)
 
-        # 记录查询历史：只在"查到了"或"结果待补齐"时记，
-        # 避免把随手打错的词也塞进历史。
+        # 记录查询历史：只要打开了词条详情页就写入，包括词库未收录的
+        # 自建词条页；只有用户显式关闭历史记录时才不新增。
         if self.history is not None and bool(self._config["history_enabled"]):
-            if self._results or pending:
-                self.history.record(word)
-                if self._history_dialog is not None:
-                    self._history_dialog.refresh_if_visible()
+            self.history.record(word)
+            if self._history_dialog is not None:
+                self._history_dialog.refresh_if_visible()
 
         self._update_star()
         # 仅当搜索框内容被本次查词改变时，才刷新候选列表
@@ -1399,7 +1814,7 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------ 生词本分组
     def _reload_groups(self):
-        """生词本分组 / 生词变化时刷新顶栏 ★（下拉菜单在打开时按需重建）。"""
+        """生词本分组 / 生词变化时刷新标题条 ★（下拉菜单在打开时按需重建）。"""
         self._update_star()
 
     def _selected_group_id(self) -> int:
@@ -1437,16 +1852,20 @@ class MainWindow(QMainWindow):
 
     # ---------------------------------------------------------------- 生词
     def _update_star(self):
-        """★ 是否可见 / 填充：没查词时隐藏；查了词后，★
-        表示当前词已在任一分组里（即已收藏），☆ 表示尚未收藏。"""
+        """★ 是否可见 / 是否实心：没查词时隐藏；查了词后，实心星表示
+        当前词已在任一分组里（即已收藏），空心星表示尚未收藏。"""
         has_word = bool(self._current_word)
         self._btn_star.setVisible(has_word)
+        # 轻量测试 harness 没有标题条；正式窗口里顺便同步标题与笔记标识。
+        if hasattr(self, "_entry_header"):
+            self._update_entry_header()
         if not has_word:
             return
         favorited = self.wordbook.has(self._current_word)   # 在任一分组里即为收藏
-        self._btn_star.blockSignals(True)
-        self._btn_star.setText("★" if favorited else "☆")
-        self._btn_star.blockSignals(False)
+        self._star_filled = bool(favorited)
+        # 图标切换只是换一张位图，不触发按钮信号；harness 没有这个方法。
+        if hasattr(self, "_apply_star_icon"):
+            self._apply_star_icon()
         names = self.wordbook.groups_of(self._current_word)
         self._btn_star.setToolTip(
             ((_("所属分组：{}\n").format("、".join(names))) if names else "")
@@ -1696,6 +2115,9 @@ class MainWindow(QMainWindow):
         比只在 closeEvent 里保存可靠（closeEvent 在"最小化到托盘"时根本不走
         退出分支）。
         """
+        # 挂在 aboutToQuit 上，所以这是「退出前最后一次」可靠的落盘时机：
+        # 只写在 closeEvent 里会漏掉最小化到托盘 / 托盘退出这两条路径。
+        self._flush_note()
         geo = self.saveGeometry().toBase64().data().decode("ascii")
         if geo:
             self._config["window_geometry"] = geo

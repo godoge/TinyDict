@@ -6,9 +6,13 @@
 - wordbook_groups: 生词本分组
 - wordbook_tags  : 生词 ↔ 分组 关联（标签式多归属：一个词可属于多个分组）
 - history        : 查询历史（按词去重，记录最近查询时间与累计次数）
+- notes          : 词条笔记（规范化 word_key 主键，带同步元数据与删除墓碑）
+- note_sync      : 每个词的「上次与对端达成一致的内容」，三路合并的基线
+- note_conflicts : 双端同时修改且无法自动合并时留下的冲突副本
 
 词条正文与 MDD 资源**不再入库**：查询与资源渲染直接从挂载的
 .mdx/.mdd 原文件按需读取（详见 core.mdx_access）。
+笔记的读写与跨设备合并逻辑集中在 core.notes（这里只负责建表）。
 旧的 entries / resources 表在启动时自动删除（旧版全量导入数据）。
 
 连接管理：SQLite 连接不能跨线程复用，这里按线程维护局部连接
@@ -95,6 +99,49 @@ CREATE TABLE IF NOT EXISTS history(
     times INTEGER DEFAULT 1
 );
 CREATE INDEX IF NOT EXISTS idx_history_time ON history(queried_at DESC);
+
+-- 词条笔记。word_key 是 NFKC + casefold + 折叠空白后的规范化键，
+-- 避免「Apple / apple / Ａｐｐｌｅ」分裂成三条（生词本已有这个历史问题）。
+-- deleted 是墓碑：删笔记只置位、不物理删行，否则「一端删除」在另一端
+-- 导入旧备份时会被当成「新增」而复活。
+CREATE TABLE IF NOT EXISTS notes(
+    word_key    TEXT PRIMARY KEY,
+    word        TEXT NOT NULL,
+    body        TEXT NOT NULL DEFAULT '',
+    created_at  TEXT,
+    updated_at  TEXT NOT NULL,
+    device_id   TEXT NOT NULL DEFAULT '',
+    revision    INTEGER NOT NULL DEFAULT 1,
+    deleted     INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_notes_updated ON notes(updated_at DESC);
+
+-- 三路合并基线：导出 / 成功合并后，把「双方一致的内容」记在这里。
+-- 下次导入时用 base 判断「是只有一端改了，还是两端都改了」。
+CREATE TABLE IF NOT EXISTS note_sync(
+    word_key     TEXT PRIMARY KEY,
+    base_body    TEXT NOT NULL DEFAULT '',
+    base_deleted INTEGER NOT NULL DEFAULT 0,
+    peer_id      TEXT NOT NULL DEFAULT '',
+    synced_at    TEXT
+);
+
+-- 冲突副本：两端都改过时默认保留本地，远端内容完整存这里供人工合并，
+-- 绝不静默丢弃。resolved=1 表示已处理（保留记录便于回溯）。
+CREATE TABLE IF NOT EXISTS note_conflicts(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    word_key TEXT NOT NULL,
+    word TEXT NOT NULL,
+    local_body TEXT NOT NULL DEFAULT '',
+    remote_body TEXT NOT NULL DEFAULT '',
+    local_updated_at TEXT,
+    remote_updated_at TEXT,
+    peer_id TEXT,
+    created_at TEXT,
+    resolved INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_note_conflicts_open
+    ON note_conflicts(resolved, created_at DESC);
 """
 
 

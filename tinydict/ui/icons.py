@@ -32,6 +32,15 @@ from PySide6.QtGui import (
 # 0.06 比初版 0.085 更细，小尺寸下不至于显得沉
 _NAV_STROKE = 0.06
 
+# 收藏星两态的线宽分开：实心星有内部填充撑住视觉重量，笔宽只相当于
+# 外缘再扩一圈；空心星只有轮廓，笔宽直接决定它看起来粗不粗。
+_STAR_STROKE_FILLED = 0.105   # 已收藏：沿用初版，保持形状与视觉重量不变
+_STAR_STROKE_HOLLOW = 0.090   # 未收藏：按反馈调细，32px 画布 3.36→2.88px
+#
+# 实测（20px 显示、24 位统计）：0.105 的空心轮廓满不透明像素 25 个，
+# 角偏钝、空腔被挤窄；0.090 是 10 个，轮廓仍连续不发虚；再细到 0.080
+# 只剩 2 个，就回到字体字形那种断续灰线了。
+
 #: 支持的导航图标名
 NAV_ICONS = ("pin", "dict", "wordbook", "history", "settings", "about", "menu")
 
@@ -191,18 +200,31 @@ def _draw_dict(p: QPainter, s: int) -> None:
     p.drawLine(QPointF(spine_x, y0), QPointF(spine_x, y0 + h))
 
 
-def _draw_wordbook(p: QPainter, s: int) -> None:
-    """生词本：五角星轮廓（与顶栏 ★ 按钮语义一致）。"""
+def _star_path(s: float) -> QPainterPath:
+    """标准五角星闭合路径（顶角朝上），导航「生词本」与收藏星共用。
+
+    内外半径比约 0.40：偏大会让五个角显得"胖"而失去星形感。
+    共用同一条路径，收藏状态切换时星形不会跳动。
+    """
     cx = cy = s / 2
     outer = s * 0.34
-    # 内外半径比约 0.4 是标准五角星；偏大会让五个角显得"胖"而失去星形感
     inner = outer * 0.40
-    pts = []
+    path = QPainterPath()
     for i in range(10):
         r = outer if i % 2 == 0 else inner
         a = -pi / 2 + i * pi / 5
-        pts.append(QPointF(cx + r * cos(a), cy + r * sin(a)))
-    p.drawPolygon(pts)
+        pt = QPointF(cx + r * cos(a), cy + r * sin(a))
+        if i == 0:
+            path.moveTo(pt)
+        else:
+            path.lineTo(pt)
+    path.closeSubpath()
+    return path
+
+
+def _draw_wordbook(p: QPainter, s: int) -> None:
+    """生词本：五角星轮廓（与词条标题条的收藏星同一形状）。"""
+    p.drawPath(_star_path(s))
 
 
 def _draw_history(p: QPainter, s: int) -> None:
@@ -293,6 +315,65 @@ def nav_icon(kind: str, color: QColor, size: int = 32) -> QIcon:
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.setPen(_nav_pen(color, size))
         fn(painter, size)
+    finally:
+        painter.end()
+    return QIcon(pm)
+
+
+# ---------------------------------------------------------------------------
+# 词条标题条的收藏星：空心 = 未收藏，实心 = 已收藏
+# ---------------------------------------------------------------------------
+
+def star_icon(filled: bool, color: QColor, size: int = 32) -> QIcon:
+    """生成收藏星图标，描边 / 填充色均为 color。
+
+    不用字体字符 U+2606「☆」/ U+2605「★」：在 18px 下实测，空心字形的
+    86 个墨点像素全部落在半透明区间、满不透明像素为 0，整条轮廓发灰发虚，
+    看起来就是锯齿；实心字形有 30 个满不透明像素把边缘撑住，所以只有
+    未收藏状态显毛糙。两态墨点数同为 86，说明差异只来自填充与否。
+
+    这里两态共用同一条矢量路径 + 圆头圆角画笔，边缘由 QPainter 抗锯齿
+    统一生成。空心态内部保持透明，透出标题条背景，因此浅色 / 深色主题
+    都不需要写死白色（颜色由 theme.star_color 按主题给出）。
+
+    只有空心星按反馈调细了描边（_STAR_STROKE_HOLLOW）；实心星仍用
+    _STAR_STROKE_FILLED，保证「已收藏」的观感一点不变。
+    """
+    pm = QPixmap(size, size)
+    pm.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pm)
+    try:
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        pen = QPen(color)
+        stroke = (_STAR_STROKE_FILLED if filled else _STAR_STROKE_HOLLOW)
+        pen.setWidthF(max(1.0, size * stroke))
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+        painter.setBrush(QBrush(color) if filled else Qt.BrushStyle.NoBrush)
+        painter.drawPath(_star_path(size))
+    finally:
+        painter.end()
+    return QIcon(pm)
+
+
+def note_dot_icon(color: QColor, size: int = 32) -> QIcon:
+    """「显示笔记」勾选框左侧的「有笔记」小圆点。
+
+    颜色传透明时得到一张全透明的占位图：圆点控件尺寸固定，有笔记 /
+    无笔记切换时宽度不会跳动，标题条右侧的工具胶囊也不会左右晃。
+    实心圆而不是字体字符，避免小尺寸下出现毛边或豆腐块。
+    """
+    pm = QPixmap(size, size)
+    pm.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pm)
+    try:
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(color))
+        # 直径 0.6 * size；按钮按 10px 显示时是约 6px 的圆点
+        painter.drawEllipse(QPointF(size / 2, size / 2),
+                            size * 0.30, size * 0.30)
     finally:
         painter.end()
     return QIcon(pm)

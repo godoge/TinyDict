@@ -142,21 +142,26 @@ def main():
     win = MainWindow(svc, cfg, StubWordbook(), history=hb)
     check("窗口拿到 history", win.history is hb)
 
-    # 无结果时不记录（lookup 返回 [] 且无 pending）
+    # 未收录也会打开自建词条页，同样记历史
     win.do_lookup("nothing-here")
-    check("未命中不记历史", hb.count() == 0, f"count={hb.count()}")
+    check("未收录词打开详情也记历史", hb.count() == 1, f"count={hb.count()}")
+    win.do_lookup("nothing-here")
+    rows = hb.recent()
+    check("未收录词重复打开只累加次数",
+          hb.count() == 1 and rows[0][0] == "nothing-here" and rows[0][2] == 2,
+          f"count={hb.count()} rows={rows}")
 
     # 有结果时记录
     from tinydict.core.query import EntryResult
     svc.hits = [EntryResult(word="ok", dict_id=1, dict_name="D",
                             encoding="utf-8", definition=b"<b>ok</b>")]
     win.do_lookup("ok")
-    check("命中时记入历史", hb.count() == 1, f"count={hb.count()}")
+    check("命中时记入历史", hb.count() == 2, f"count={hb.count()}")
 
     # 搜索框为空 → 候选列表展示历史
     win.search_edit.setText("")
     win._refresh_suggestions()
-    check("空输入时显示历史", win.suggest_list.count() == 1,
+    check("空输入时显示历史", win.suggest_list.count() == 2,
           f"count={win.suggest_list.count()}")
     item = win.suggest_list.item(0)
     check("历史项 UserRole 存真词",
@@ -171,11 +176,14 @@ def main():
     win.do_lookup = orig_lookup
     check("点击历史项取到真词", got == ["ok"], f"got={got}")
 
-    # 有输入时走词库建议，不显示历史
+    # 有输入时走词库建议、不显示历史；首位还要保留当前输入词（自建词条）。
+    # 词库建议与输入词不同名，所以列表是 [输入词, suggest_ze] 两条。
     win.search_edit.setText("ze")
     win._refresh_suggestions()
-    check("有输入时走词库建议", win.suggest_list.count() == 1
-          and win.suggest_list.item(0).text() == "suggest_ze")
+    items = [win.suggest_list.item(i).text()
+             for i in range(win.suggest_list.count())]
+    check("有输入时走词库建议 + 保留当前输入词",
+          items == ["ze", "suggest_ze"], f"items={items}")
 
     print("== 历史对话框 ==")
     from tinydict.ui.history_dialog import HistoryDialog
@@ -184,7 +192,7 @@ def main():
     win.do_lookup("ok")
     win.do_lookup("word")
     dlg = HistoryDialog(hb, config=cfg)
-    check("对话框列出 2 条", dlg._list.count() == 2, f"count={dlg._list.count()}")
+    check("对话框列出 3 条", dlg._list.count() == 3, f"count={dlg._list.count()}")
     dlg._filter.setText("wor")
     check("过滤后 1 条", dlg._list.count() == 1, f"count={dlg._list.count()}")
     dlg._filter.setText("")

@@ -118,6 +118,10 @@ class StarMenuTests(_DbCase):
                 self.wordbook, self._current_word = wb, word
                 self._status_info = QLabel()
                 self._btn_star = QToolButton(text="star")
+                # 正式窗口里 _apply_star_icon() 会按状态重画矢量星图标，
+                # harness 只记录调用，断言状态切换确实传到了图标层。
+                self._star_filled = False
+                self.star_icon_calls = []
                 self._star_menu = _StayOpenMenu(self._btn_star)
                 self._btn_star.setMenu(self._star_menu)
                 self._star_menu.aboutToShow.connect(self._build_star_menu)
@@ -125,6 +129,9 @@ class StarMenuTests(_DbCase):
 
             def _create_group(self):
                 pass
+
+            def _apply_star_icon(self):
+                self.star_icon_calls.append(self._star_filled)
 
         self.h = Harness(self.wb, "Apple")
         self.addCleanup(self.h._star_menu.hide)
@@ -163,7 +170,16 @@ class StarMenuTests(_DbCase):
         state = self._checked_after_reopen()
         self.assertEqual(state, [("默认分组", False, False),
                                  ("考研", False, False)])
-        self.assertEqual(self.h._btn_star.text(), "☆")
+        self.assertFalse(self.h._star_filled)
+        self.assertEqual(self.h.star_icon_calls[-1], False)
+        # 图标是位图，不再靠改按钮文字切换状态
+        self.assertEqual(self.h._btn_star.text(), "star")
+
+    def test_收藏后星形切到实心并触发重画(self):
+        self._click_group(self.group.id)
+        self.assertTrue(self.wb.has("Apple"))
+        self.assertTrue(self.h._star_filled)
+        self.assertEqual(self.h.star_icon_calls[-1], True)
 
     def test_先默认再自建_取消默认分组后只剩自建分组(self):
         self.wb.add("Apple", DEFAULT_GROUP_ID)

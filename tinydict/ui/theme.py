@@ -271,6 +271,39 @@ QListWidget#suggest_list::item:selected{background:#dbeafe;color:#111827;}
 QTabBar::tab{padding:5px 14px;background:#f3f4f6;color:#4b5563;}
 QTabBar::tab:selected{background:#fff;color:#1d4ed8;
     border:1px solid #e5e7eb;border-bottom:1px solid #fff;}
+/* 固定词条标题条（单行）：词形 + 右侧圆角工具胶囊 */
+QFrame#entry_header{
+    background:#fff;border-bottom:1px solid #e5e7eb;
+}
+QLabel#entry_headword{
+    color:#111827;font-size:20px;font-weight:600;padding:1px 2px;
+}
+/* 工具胶囊把 ★ / 分隔线 / 圆点 + 「显示笔记」收成视觉上的一组。 */
+QFrame#entry_tools{
+    background:#f3f4f6;border:1px solid #e5e7eb;border-radius:16px;
+}
+QFrame#entry_tool_sep{background:#d1d5db;margin:6px 1px;}
+/* 星形是 QPainter 位图图标，QSS 的 color / font-size 对它无效；
+   图标颜色由 star_color() 按主题给出，换肤时重画。 */
+QToolButton#entry_star_btn{
+    border:1px solid transparent;padding:3px 7px;border-radius:12px;
+}
+QToolButton#entry_star_btn:hover{
+    background:#fff7ed;border-color:#fed7aa;
+}
+/* 圆点位固定 10x10，放在勾选框左边；透明占位图也用同一个控件。 */
+QLabel#entry_note_dot{background:transparent;padding:0;margin:0;}
+/* 「显示笔记」勾选框：indicator 只给尺寸，不覆盖 border / background，
+   否则 QStyleSheetStyle 会把勾也一并抹掉（离屏实测）。方框与勾的颜色
+   交给 ThemeManager 的 palette，浅 / 深主题都自动适配、不写死白色。
+   控件背景必须给实色且和父容器 QFrame#entry_tools 完全一致：写
+   transparent 会让 Qt 把 indicator 的边框也一起透明化，只剩一个勾。 */
+QCheckBox#entry_notes_cb{
+    color:#4b5563;font-size:13px;spacing:6px;
+    background:#f3f4f6;padding:2px 4px;
+}
+QCheckBox#entry_notes_cb::indicator{width:15px;height:15px;}
+QCheckBox#entry_notes_cb:checked{color:#1d4ed8;}
 QStatusBar{color:#6b7280;}
 QStatusBar QLabel{padding:0 10px;}
 QComboBox#group_combo{
@@ -304,6 +337,39 @@ QListWidget#suggest_list::item:selected{background:#1f4e79;color:#fff;}
 QTabBar::tab{padding:5px 14px;background:#2d2d30;color:#9ca3af;}
 QTabBar::tab:selected{background:#1e1e1e;color:#93c5fd;
     border:1px solid #374151;border-bottom:1px solid #1e1e1e;}
+/* 固定词条标题条（单行）：词形 + 右侧圆角工具胶囊 */
+QFrame#entry_header{
+    background:#252526;border-bottom:1px solid #3f3f46;
+}
+QLabel#entry_headword{
+    color:#e5e7eb;font-size:20px;font-weight:600;padding:1px 2px;
+}
+QFrame#entry_tools{
+    background:#2d2d30;border:1px solid #3f3f46;border-radius:16px;
+}
+QFrame#entry_tool_sep{background:#4b5563;margin:6px 1px;}
+/* 星形图标颜色由 star_color() 按主题给出，见浅色版注释。 */
+QToolButton#entry_star_btn{
+    border:1px solid transparent;padding:3px 7px;border-radius:12px;
+}
+QToolButton#entry_star_btn:hover{
+    background:#3a2a16;border-color:#785a1a;
+}
+QLabel#entry_note_dot{background:transparent;padding:0;margin:0;}
+/* 深色版同样只给 indicator 尺寸，方框与勾走 palette（见浅色版注释）。
+   背景与 QFrame#entry_tools 一致，否则 indicator 边框会被透明化。 */
+QCheckBox#entry_notes_cb{
+    color:#d4d4d4;font-size:13px;spacing:6px;
+    background:#2d2d30;padding:2px 4px;
+}
+QCheckBox#entry_notes_cb::indicator{width:15px;height:15px;}
+/* 深色下 Fusion 原生 indicator 的边框太暗，1x 时几乎只剩一个勾。
+   只给「未勾选」态补边框；勾选态仍走原生绘制，勾不会被 QSS 抹掉
+   （两态都写 border/background 会丢勾，离屏实测）。 */
+QCheckBox#entry_notes_cb::indicator:unchecked{
+    border:1px solid #6b7280;border-radius:3px;background:#2d2d30;
+}
+QCheckBox#entry_notes_cb:checked{color:#93c5fd;}
 QStatusBar{color:#9ca3af;}
 QStatusBar QLabel{padding:0 10px;color:#9ca3af;}
 QComboBox#group_combo{
@@ -317,10 +383,50 @@ QToolButton:hover{background:#374151;}
 """
 
 
+# ----------------------------------------------------------------------
+# 笔记面板：主窗口右下方的编辑区 + 笔记导入导出/冲突对话框共用。
+# 单独拆出来，是因为 app_qss() 给主窗口、wb_qss() 给对话框，两边都要叠这段，
+# 复制两份迟早会一处改了另一处没改。
+# ----------------------------------------------------------------------
+_NOTES_PANEL_QSS_LIGHT = """
+QLabel#notes_title{color:#1f2937;font-size:13px;font-weight:600;}
+QLabel#notes_hint{color:#6b7280;font-size:12px;padding:2px 0;}
+QLabel#notes_state{color:#6b7280;font-size:12px;}
+QLabel#notes_section{color:#374151;font-size:12px;font-weight:600;}
+QTextEdit#notes_editor{
+    border:1px solid #d1d5db;border-radius:6px;background:#fff;color:#1f2937;
+    font-size:13px;padding:6px 8px;selection-background-color:#3b82f6;
+    selection-color:#fff;
+}
+QTextEdit#notes_editor:focus{border-color:#60a5fa;}
+QFrame#notes_panel{background:#fafafa;border:1px solid #e5e7eb;border-radius:6px;}
+QToolButton#notes_conflict_btn{color:#b45309;font-size:12px;padding:2px 8px;}
+"""
+_NOTES_PANEL_QSS_DARK = """
+QLabel#notes_title{color:#e5e7eb;font-size:13px;font-weight:600;}
+QLabel#notes_hint{color:#9ca3af;font-size:12px;padding:2px 0;}
+QLabel#notes_state{color:#9ca3af;font-size:12px;}
+QLabel#notes_section{color:#e5e7eb;font-size:12px;font-weight:600;}
+QTextEdit#notes_editor{
+    border:1px solid #3f3f46;border-radius:6px;background:#252526;color:#d4d4d4;
+    font-size:13px;padding:6px 8px;selection-background-color:#1f4e79;
+    selection-color:#fff;
+}
+QTextEdit#notes_editor:focus{border-color:#60a5fa;}
+QFrame#notes_panel{background:#252526;border:1px solid #3f3f46;border-radius:6px;}
+QToolButton#notes_conflict_btn{color:#fbbf24;font-size:12px;padding:2px 8px;}
+"""
+
+
+def notes_panel_qss(mode: str) -> str:
+    """笔记面板专属样式（可叠加在 app_qss / wb_qss 之后）。"""
+    return _NOTES_PANEL_QSS_DARK if mode == "dark" else _NOTES_PANEL_QSS_LIGHT
+
+
 def app_qss(mode: str) -> str:
-    """主窗口（含顶栏控件 / 联想列表 / Tab / 搜索框）的样式表。"""
+    """主窗口（含顶栏控件 / 联想列表 / Tab / 搜索框 / 笔记面板）的样式表。"""
     base = _APP_QSS_DARK if mode == "dark" else _APP_QSS_LIGHT
-    return base + scrollbar_qss(mode)
+    return base + scrollbar_qss(mode) + notes_panel_qss(mode)
 
 
 def toolbutton_fg(mode: str) -> str:
@@ -332,6 +438,30 @@ def toolbutton_fg(mode: str) -> str:
         灰阶的值，让"画出来的图标"和"排出来的文字"永远是同一个颜色。
     """
     return "#d4d4d4" if mode == "dark" else "#374151"
+
+
+def star_color(mode: str) -> str:
+    """已收藏星的颜色（描边与填充共用）：金色强调。
+
+    星形是 QPainter 画出来的位图图标，不会跟着 QSS 的 color 自动换色，
+    所以必须由调用方显式传入，并在换肤时重新生成。空心星内部不填色，
+    透出的是标题条背景，因此浅色 / 深色主题都不写死白色。
+    """
+    return "#fbbf24" if mode == "dark" else "#b45309"
+
+
+def star_neutral_color(mode: str) -> str:
+    """未收藏星的颜色：与顶栏导航图标同一套中性黑白灰。
+
+    未收藏是「普通状态」，不该和已收藏的金色抢视觉；浅色用近黑、
+    深色用近白，保证两种主题下都有足够对比，也不写死白色。
+    """
+    return toolbutton_fg(mode)      # 浅 #374151 / 深 #d4d4d4
+
+
+def note_dot_color(mode: str) -> str:
+    """「显示笔记」勾选框左侧「有笔记」圆点的颜色，与已收藏星同一强调色。"""
+    return star_color(mode)
 
 
 _WB_QSS_LIGHT = """

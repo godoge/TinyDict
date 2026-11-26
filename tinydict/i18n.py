@@ -418,6 +418,9 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
 
         # ---- 主窗口状态 / 提示 ----
         "未找到词条": "No entry found",
+        "「{}」在词库里没有对应词条，仍可作为当前词条收藏到生词本。":
+            "“{}” has no entry in the loaded dictionaries, but you can still "
+            "keep it as the current entry and save it to a wordbook.",
         "还有 {} 部词库正在加载，完成后自动重新查询":
             "Still loading {} dictionary(ies); will re-query when done",
         "词典：{}": "Dictionary: {}",
@@ -461,6 +464,116 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "不是 TinyDict 生词本备份文件": "Not a TinyDict wordbook backup file",
         "不支持的备份文件版本：{}": "Unsupported backup file version: {}",
         "无法解析：{}": "Failed to parse: {}",
+
+        # ---- 词条笔记 / 跨设备同步（core/notes.py, ui/notes_dialog.py）----
+        "笔记面板": "Notes panel",
+        "显示 / 隐藏词条下方的笔记面板（笔记会自动保存）":
+            "Show/hide the notes panel below the entry (saved automatically)",
+        "笔记": "Notes",
+        "显示笔记": "Show notes",
+        "这个词条已有笔记；勾选「显示笔记」可展开查看":
+            "This entry has notes; tick \"Show notes\" to view them",
+        "笔记 · {}": "Notes · {}",
+        "查看两端冲突的笔记并人工合并":
+            "Review notes changed on both devices and merge manually",
+        "导出笔记备份，或从另一台设备导入并合并":
+            "Export a notes backup, or import and merge one from another device",
+        "给当前词条写点笔记…（自动保存，词库没收录的词也可以写）":
+            "Write a note for this entry… (saved automatically; works even for "
+            "words missing from your dictionaries)",
+        "正在保存…": "Saving…",
+        "已保存": "Saved",
+        "保存失败：{}": "Save failed: {}",
+        "导入 / 导出": "Import / Export",
+        "{} 条冲突待合并": "{} conflicts to merge",
+        "笔记导入 / 导出": "Notes Import / Export",
+        "导出格式：": "Export format:",
+        "JSON 完整备份（推荐，可双向同步）":
+            "JSON full backup (recommended, two-way sync)",
+        "手机版生词本备份 JSON（带笔记）":
+            "Mobile wordbook backup JSON (with notes)",
+        "CSV 表格": "CSV spreadsheet",
+        "手机版生词本 CSV（带笔记）": "Mobile wordbook CSV (with notes)",
+        "MDX 词库快照（只读）": "MDX dictionary snapshot (read-only)",
+        "导出到文件…": "Export to file…",
+        "尚未选择文件": "No file selected",
+        "选择文件…": "Choose file…",
+        "开始导入": "Import",
+        "导出笔记": "Export notes",
+        "导出完成": "Export complete",
+        "导入笔记": "Import notes",
+        "导入完成": "Import complete",
+        "导入完成，可以继续选择其它文件。":
+            "Import complete. You can choose another file.",
+        "合并冲突的笔记": "Merge conflicting notes",
+        "保留本机": "Keep local",
+        "采用导入": "Use imported",
+        "保存合并结果": "Save merged result",
+        "从手机或另一台电脑导出的笔记文件：":
+            "Notes file exported from a phone or another computer:",
+        "冲突处理方式：": "Conflict handling:",
+        "还没有任何笔记。": "There are no notes yet.",
+        "这个文件里没有笔记。\n如果是手机版导出的生词本备份，需要先在手机端合入笔记导出补丁。":
+            "No notes found in this file.\nIf this is a wordbook backup from the "
+            "mobile app, install the notes export patch there first.",
+        "导入完成：{}。": "Import complete: {}.",
+        "两端都修改过同一条笔记时，本机版本已保留。下面可以逐条选择保留哪个版本，或手工拼出最终内容。":
+            "When both devices edited the same note, the local version was kept. "
+            "Choose which version to keep, or write a merged version below.",
+        "本机版本": "Local version",
+        "导入版本": "Imported version",
+        "合并结果（可编辑）": "Merged result (editable)",
+        "所有冲突都已处理。": "All conflicts resolved.",
+        "当前共 {} 条笔记、{} 条删除记录、{} 条未处理冲突。":
+            "{} notes, {} deletion records, {} unresolved conflicts.",
+        "已导出 {} 条记录到 {}。\n\n已记录同步基线：之后在另一台设备上的修改可以正确区分，不会误判成冲突。":
+            "Exported {} records to {}.\n\nSync baseline recorded: later edits "
+            "on another device can be told apart correctly.",
+        "{}：{} 条笔记，来源 {}，导出时间 {}":
+            "{}: {} notes, from {}, exported {}",
+        "未知": "Unknown",
+        "即将合并 {} 条笔记（来源 {}）。\n\n处理方式：{}\n\n三路合并会保留本机最近一次的修改；两端都改过的词不会静默覆盖，而是留下冲突副本供人工合并。继续吗？":
+            "About to merge {} notes (from {}).\n\nStrategy: {}\n\n"
+            "Three-way merge keeps recent local edits; notes changed on both "
+            "sides are not overwritten silently — a conflict copy is kept for "
+            "manual merge. Continue?",
+        "\n\n{} 条笔记在两端都被修改过：已保留本机版本，另一端的完整内容存为冲突副本。点笔记面板右上角的「冲突」按钮即可人工合并。":
+            "\n\n{} notes were edited on both devices: the local version was "
+            "kept and the other version saved as a conflict copy. Use the "
+            "conflicts button in the notes panel to merge them manually.",
+        "时间未知": "Time unknown",
+        "还有 {} 条冲突待处理。": "{} conflicts remaining.",
+
+        # 导出格式 / 导入策略的说明文字是从常量里动态取出来再翻译的，
+        # AST 扫描找不到，必须和上面的静态文案一起维护。
+        "完整同步备份：带设备标识、修改时间、版本号和删除标记，适合电脑 ↔ 手机、电脑 ↔ 电脑双向同步。":
+            "Full sync backup: device ID, edit time, revision and deletion "
+            "markers. Use for two-way sync between devices.",
+        "手机版现有生词本备份格式 + 可选笔记字段。未装配套补丁的旧版手机也能导入生词，只是暂不显示笔记。":
+            "Mobile wordbook backup format with optional note fields. Older "
+            "mobile builds can still import the words — notes just won't show up yet.",
+        "通用表格，Excel 可直接打开；正文里带换行也能正确还原。":
+            "Plain spreadsheet that Excel can open. Line breaks inside a note "
+            "are preserved.",
+        "手机版生词本 CSV + 笔记扩展列，列顺序与旧版兼容。":
+            "Mobile wordbook CSV with extra note columns; existing column order "
+            "is unchanged.",
+        "把笔记打包成只读 MDX 词库，任何 MDX 词典软件都能查；它是快照，不参与同步与编辑。":
+            "Packages notes as a read-only MDX dictionary any MDX reader can "
+            "search. A snapshot — it does not sync or accept edits.",
+        "用上次同步的内容做基线：只有一端改过就自动合并；两端都改过则保留本机，并把另一端完整存成冲突副本，可在笔记面板的「冲突」按钮里人工合并，不会静默丢内容。":
+            "Uses the last agreed content as a baseline: one-sided edits merge "
+            "automatically; when both sides edited, the local version is kept "
+            "and the other saved as a conflict copy you can merge manually. "
+            "Nothing is silently lost.",
+        "本机已有的笔记一律不动（包括已删除的），只把文件里本机完全没有的词补进来。":
+            "Existing local notes are left untouched (including deleted ones). "
+            "Only words missing locally are added.",
+        "同名笔记无条件用文件内容覆盖本机版本。":
+            "Matching notes are overwritten with the file contents unconditionally.",
+        "三路合并（推荐）": "Three-way merge (recommended)",
+        "只补本地没有的": "Only add missing notes",
+        "以导入文件为准": "Use imported file",
     },
 }
 

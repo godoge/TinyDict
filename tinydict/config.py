@@ -31,6 +31,13 @@ class Config:
     #                          空字符串表示首次启动，用代码里的默认尺寸。
     # - splitter_state       : 左栏（搜索/候选）与右栏（词条）比例的 base64
     #                          （Qt QSplitter.saveState 结果）；空则用默认比例。
+    # - device_id            : 跨设备笔记同步用的稳定设备标识。首次启动生成一次，
+    #                          之后写进每份笔记备份；导入端靠它判断「哪一端改过」。
+    #                          不要用机器名：重装/改名会让它漂移。
+    # - notes_visible        : 进入词条后，词条页下方的笔记面板是否展开（标题条上
+    #                          的「显示笔记」勾选框可切换，重启后保持上次选择）。
+    #                          欢迎页（还没有当前词条）不显示笔记面板，但此配置
+    #                          值不变，进入第一个词条时据此恢复。
     DEFAULTS = {
         "hotkey_show_hide": "ctrl+alt+d",
         "hotkey_capture": "ctrl+alt+q",
@@ -45,6 +52,8 @@ class Config:
         "language": "zh_CN",
         "window_geometry": "",
         "splitter_state": "",
+        "device_id": "",
+        "notes_visible": True,
     }
 
     def __init__(self, path: Path):

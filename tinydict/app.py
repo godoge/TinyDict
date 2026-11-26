@@ -1,5 +1,7 @@
 """应用组装层：主窗口 / 系统托盘 / 全局快捷键 / 划词取词的生命周期与信号接线。"""
 
+import uuid
+
 from PySide6.QtCore import QObject, QTimer
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
@@ -8,6 +10,7 @@ from .config import Config
 from .i18n import _, set_language
 from .core.database import Database
 from .core.history import HistoryBook
+from .core.notes import Notes
 from .core.query import DictionaryService
 from .core.wordbook import WordBook
 from .paths import cache_dir, config_path, db_path
@@ -95,6 +98,12 @@ class TinyDictApp:
         self.service = DictionaryService(self.db, cache_dir())
         self.wordbook = WordBook(self.db)
         self.history = HistoryBook(self.db)
+        # 设备标识只生成一次并持久化：两端笔记合并时靠它区分「本机改的」和
+        # 「对端改的」，每次启动都换一个会让所有历史笔记看起来都来自陌生设备。
+        if not str(self.config["device_id"] or "").strip():
+            self.config["device_id"] = "pc-" + uuid.uuid4().hex[:12]
+            self.config.save()
+        self.notes = Notes(self.db, str(self.config["device_id"]))
 
         # 界面语言：按配置初始化（默认中文）。切换语言后会重启进程重新走到这里。
         # 必须在 self.config 赋值之后调用。
@@ -107,7 +116,8 @@ class TinyDictApp:
         # 界面层
         self.window = MainWindow(self.service, self.config, self.wordbook,
                                  theme_manager=self.theme_manager,
-                                 history=self.history)
+                                 history=self.history,
+                                 notes=self.notes)
         self.tray = TrayController(self)
         self.window.set_tray(self.tray)
 
